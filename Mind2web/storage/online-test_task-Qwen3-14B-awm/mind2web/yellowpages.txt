@@ -1,0 +1,5 @@
+## search-popular-businesses
+Given a city name, this workflow retrieves a list of popular businesses in that city.
+[INPUT] search_terms -> ACTION: {search-term}
+[LINK] City Pages -> ACTION: {city-name}
+[LINK] Search for more -> ACTION: {city-name}

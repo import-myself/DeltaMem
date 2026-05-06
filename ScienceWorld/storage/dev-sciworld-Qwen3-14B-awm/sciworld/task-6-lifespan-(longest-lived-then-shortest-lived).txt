@@ -1,0 +1,10 @@
+## longest-lived-then-shortest-lived
+Given a set of animals in a location, this workflow identifies the animal with the longest life span, then the animal with the shortest life span.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: identify {animals}
+Step 4: examine {animal}
+Step 5: examine {animal}
+Step 6: examine {animal}
+Step 7: focus on {animal-with-longest-lifespan}
+Step 8: focus on {animal-with-shortest-lifespan}

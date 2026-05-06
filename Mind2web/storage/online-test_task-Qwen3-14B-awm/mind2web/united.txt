@@ -1,0 +1,9 @@
+## Flight Check-In
+Given a confirmation number and last name, this workflow checks in for a flight and includes steps to access the baggage fee calculator.
+[tab] Check-in tab -> ACTION: {confirmation-number}
+[textbox] Confirmation or ticket number* -> ACTION: {confirmation-number}
+[textbox] Last name* -> ACTION: {last-name}
+[button] Search -> ACTION: {}
+[tab] TRAVEL INFO -> ACTION: {}
+[link] Baggage info -> ACTION: CLICK [4547]
+[link] Baggage fee calculator -> ACTION: CLICK [5555]

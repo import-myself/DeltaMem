@@ -1,0 +1,9 @@
+## lifespan-comparison-workflow
+Given a set of animals in a location, this workflow identifies the animal with the longest life span and then the one with the shortest life span.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: examine {animal}
+Step 4: examine {animal}
+Step 5: examine {animal}
+Step 6: focus on {longest-lived-animal}
+Step 7: focus on {shortest-lived-animal}

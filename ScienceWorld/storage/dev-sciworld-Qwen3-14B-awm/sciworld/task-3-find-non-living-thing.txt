@@ -1,0 +1,10 @@
+## find-and-move-non-living-object
+Given a task to find a non-living thing and move it to a specific location, this workflow identifies and relocates a non-living object.
+Step 1: look around
+Step 2: focus on {object-name}
+Step 3: check if {object-name} is in inventory
+Step 4: if not, teleport to {object-location}
+Step 5: if unable to pick up {object-name} from {object-location}, teleport back to {object-location}
+Step 6: pick up {object-name}
+Step 7: teleport to {target-location}
+Step 8: move {object-name} to {target-location}

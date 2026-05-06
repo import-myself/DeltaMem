@@ -1,0 +1,14 @@
+## boil-substance
+Given a substance that needs to be boiled, this workflow heats the substance using a blast furnace and waits for it to reach its boiling point.
+Step 1: locate and retrieve the {substance} from its container
+Step 2: teleport to a location where the {substance} and {heating-device} are likely to be found
+Step 3: look around to locate the {substance} and {heating-device}
+Step 4: if the {heating-device} is closed, open it to access its interior
+Step 5: if the {substance} is not found in the {heating-device}, search other locations or rooms for the {substance}
+Step 6: if the {substance} is found in another location, pick it up and teleport back to the location of the {heating-device}
+Step 7: if the {substance} is in a container, pour the {substance} from the container into the {heating-device}
+Step 8: activate the {heating-device}
+Step 9: focus on the {substance}
+Step 10: wait for the {substance} to reach its boiling point
+Step 11: examine the {heating-device} to confirm the {substance} has reached its boiling point
+Step 12: focus on the boiled {substance} to confirm the task is complete

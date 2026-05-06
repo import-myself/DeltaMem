@@ -1,0 +1,4 @@
+## find-and-move-living-thing
+Given a location where a living thing may be found and a target container, this workflow finds a living thing and moves it to the target container.
+Step 1: focus on {living-thing} in {container}
+Step 2: move {living-thing} in inventory to {target-container}

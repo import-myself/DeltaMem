@@ -1,0 +1,6 @@
+## measure-melting-point-known-substance
+Given a known substance, this workflow measures its melting point and focuses on the appropriate box based on the result.
+Step 1: {focus on thermometer}
+Step 2: {focus on substance}
+Step 3: {if melting point is above 200.0 degrees celsius, focus on blue box}
+Step 4: {if melting point is below 200.0 degrees celsius, focus on orange box}

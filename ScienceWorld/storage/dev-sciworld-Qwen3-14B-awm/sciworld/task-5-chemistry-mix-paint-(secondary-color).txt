@@ -1,0 +1,8 @@
+## mix-secondary-color
+Given two primary paint colors, this workflow creates a secondary color by mixing them.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: pour {color1} into {container}
+Step 4: pour {color2} into {container}
+Step 5: mix {container}
+Step 6: focus on {resulting-color}

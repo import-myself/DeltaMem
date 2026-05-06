@@ -1,0 +1,4 @@
+## sugar-water-creation
+Given a recipe and ingredients for making sugar water, this workflow creates sugar water by mixing sugar and water.
+Step 1: {find container} and fill it with {water}.
+Step 2: Add {sugar} to the container and mix to create {sugar water}.

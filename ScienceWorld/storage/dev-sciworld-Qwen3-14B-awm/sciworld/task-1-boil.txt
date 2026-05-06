@@ -1,0 +1,31 @@
+## boil-substance
+Given a substance that needs to be boiled, this workflow outlines the steps to locate the substance, apply heat, and confirm the boiling process.
+Step 1: locate and retrieve {substance} from {location}
+Step 2: teleport to {location} if necessary to find {substance}
+Step 3: look around to identify the location of {substance}
+Step 4: if {substance} is not found, check alternative locations
+Step 5: focus on {substance}
+Step 6: select a suitable heat source, such as {heat-source}
+Step 7: if {heat-source} is not functional, find an alternative heat source
+Step 8: activate {heat-source} if necessary
+Step 9: open {heat-source} if required to place {substance} inside
+Step 10: move {substance} to {heat-source}
+Step 11: focus on {heat-source} to apply heat
+Step 12: use {heat-source} on {substance} to apply heat
+Step 13: wait for {substance} to reach its boiling point or combust
+Step 14: if {substance} does not react, try an alternative method or heat source
+Step 15: confirm that {substance} has either boiled or combusted
+Step 16: focus on the transformed {substance} as the final step
+Step 17: if {substance} is not found in initial location, check alternative locations such as workshop or foundry
+Step 18: teleport to alternative location if necessary
+Step 19: look around in alternative location to identify {substance}
+Step 20: focus on {substance} to prepare for boiling
+Step 21: select a suitable heat source such as blast furnace or foundry
+Step 22: teleport to location of heat source if necessary
+Step 23: look around to identify heat source
+Step 24: activate heat source if necessary
+Step 25: open heat source if required
+Step 26: teleport back to location of {substance}
+Step 27: pick up {substance}
+Step 28: teleport back to heat source location
+Step 29: move {substance} to heat source

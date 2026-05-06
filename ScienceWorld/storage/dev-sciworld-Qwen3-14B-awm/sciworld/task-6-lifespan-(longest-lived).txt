@@ -1,0 +1,6 @@
+## Find-Longest-Lived-Animal
+Given a set of animals or animal-related objects in a location, this workflow identifies the animal with the longest lifespan.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: examine {object-name}
+Step 4: focus on {object-name}

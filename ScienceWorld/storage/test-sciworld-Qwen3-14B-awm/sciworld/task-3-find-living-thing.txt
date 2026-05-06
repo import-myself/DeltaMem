@@ -1,0 +1,7 @@
+## find-and-move-living-thing
+Given a task to find a living thing and move it to a specific location, this workflow identifies a living thing and transports it to the target location.
+Step 1: {search-action} in likely locations such as greenhouse or bathroom to locate a living thing.
+Step 2: {focus-on-living-thing} and {pick-up-living-thing} to prepare it for transport.
+Step 3: {teleport-to-target-location} to reach the destination where the living thing needs to be placed.
+Step 4: {look-around} to confirm the presence of the target container.
+Step 5: {move-living-thing-to-target-container} to complete the task.

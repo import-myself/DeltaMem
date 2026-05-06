@@ -1,0 +1,12 @@
+## test-conductivity-workflow
+Given a substance and a set of electrical components, this workflow determines if the substance is electrically conductive by creating a simple circuit and testing the substance's effect on the circuit.
+Step 1: {teleport to workshop}
+Step 2: {look around}
+Step 3: {focus on substance}
+Step 4: {examine battery}
+Step 5: {examine wire}
+Step 6: {connect battery anode to wire terminal 1}
+Step 7: {examine light bulb}
+Step 8: {connect wire terminal 2 to light bulb anode}
+Step 9: {activate switch}
+Step 10: {move substance to purple box}

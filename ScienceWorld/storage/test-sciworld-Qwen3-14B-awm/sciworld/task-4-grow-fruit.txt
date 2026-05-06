@@ -1,0 +1,4 @@
+## grow-fruit-workflow
+Given a seed jar containing seeds and a suitable environment for growth, this workflow grows a fruit by planting a seed and facilitating pollination.
+Step 1: {plant-container} into {container}
+Step 2: {pollinate-plant}

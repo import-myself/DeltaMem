@@ -1,0 +1,7 @@
+## test-conductivity
+Given an object and two boxes (one yellow and one purple), this workflow determines if the object is electrically conductive and places it in the appropriate box.
+Step 1: focus on {object-name}
+Step 2: if {object-name} is electrically conductive, move {object-name} to {orange-box}; else, move {object-name} to {yellow-box}
+Step 3: if {orange-box} is not in the current location, teleport to the location where {orange-box} is found
+Step 4: if {object-name} is not in inventory, pick up {object-name}
+Step 5: move {object-name} to {orange-box}

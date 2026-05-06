@@ -1,0 +1,10 @@
+[
+  "Website: seatgeek\nTask: Find help page about buying tickets.\nSuccess: True",
+  "Website: amctheatres\nTask: Check my AMC gift card balance with gift card number 87654321 and pin number 9753.\nSuccess: True",
+  "Website: new.mta.info\nTask: Find the list of all neighborhood maps for Brooklyn\nSuccess: True",
+  "Website: budget\nTask: Download the e-receipt with the last name Smith and confirmation number X123456989.\nSuccess: True",
+  "Website: us.megabus\nTask: Find information about what I should do when I lose an item on a bus.\nSuccess: True",
+  "Website: united\nTask: Check in with confirmation number 10987654 for my flight with last name Lewis.\nSuccess: True",
+  "Website: united\nTask: Open the baggage fee calculator.\nSuccess: True",
+  "Website: yellowpages\nTask: Show list of popular businesses in Cleveland.\nSuccess: True"
+]

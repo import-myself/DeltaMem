@@ -1,0 +1,8 @@
+## find-and-move-animal
+Given a task to find and move an animal to a specific location, this workflow identifies the animal and moves it to the target location.
+Step 1: explore environment to locate {animal}
+Step 2: focus on {animal}
+Step 3: teleport to {target-container-location}
+Step 4: look around to locate {target-container}
+Step 5: pick up {animal}
+Step 6: move {animal} to {target-container}

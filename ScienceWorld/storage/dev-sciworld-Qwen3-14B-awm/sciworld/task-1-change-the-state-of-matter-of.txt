@@ -1,0 +1,20 @@
+## Change-State-Of-Matter-Workflow
+Given a substance {object-name} and a heat-source {heat-source}, this workflow changes the state of matter of {object-name} by heating it.
+Step 1: Focus on {object-name}
+Step 2: Use {heat-source} on {object-name}
+Step 3: Locate {object-name} and {heat-source}
+Step 4: Open container holding {object-name}
+Step 5: Check contents of container
+Step 6: Activate {heat-source}
+Step 7: Pick up {object-name}
+Step 8: Move {object-name} to {heat-source}
+Step 9: Teleport to location containing {object-name}
+Step 10: Look around to locate {object-name} and {heat-source}
+Step 11: If {heat-source} is not available, teleport to alternative location to find {heat-source}
+Step 12: Activate {heat-source} if it is not already active
+Step 13: Teleport back to location containing {object-name}
+Step 14: Focus on {object-name}
+Step 15: Pick up {object-name}
+Step 16: Teleport to location containing {heat-source}
+Step 17: Open {heat-source} if it is closed
+Step 18: Move {object-name} to {heat-source}

@@ -1,0 +1,4 @@
+## filter-by-condition
+Given a list of items on Discogs, this workflow filters items by a specific condition.
+[link]  {condition} -> ACTION: {target-condition}
+[link]  {item-type} -> ACTION: {target-item-type}

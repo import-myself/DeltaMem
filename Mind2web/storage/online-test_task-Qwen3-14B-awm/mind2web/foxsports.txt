@@ -1,0 +1,5 @@
+## MLB_Schedule_Workflow
+Given a sports website, this workflow navigates to the schedule section for a specific MLB team.
+[LINK] MLB link -> ACTION: {mlb-team}
+[LINK] Team link -> ACTION: {team-name}
+[HEADING] Schedule heading -> ACTION: {schedule-section}

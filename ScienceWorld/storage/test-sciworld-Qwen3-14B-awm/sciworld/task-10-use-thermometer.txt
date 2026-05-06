@@ -1,0 +1,11 @@
+## workflow-thermometer-wire-temperature-check
+Given a thermometer and a wire located in different rooms, this workflow measures the temperature of the wire and places it in the appropriate box based on the temperature reading.
+Step 1: Teleport to the room where {object-name} is located.
+Step 2: Look around to confirm the presence of {object-name}.
+Step 3: If {object-name} is not in the current room, teleport to the room where the thermometer is located.
+Step 4: Look around to confirm the presence of the thermometer.
+Step 5: Focus on the thermometer.
+Step 6: Teleport back to the room where {object-name} is located.
+Step 7: Focus on {object-name}.
+Step 8: Use thermometer on {object-name} to measure its temperature.
+Step 9: If {target-value} is above 200.0 degrees celsius, place {object-name} in green box. If {target-value} is below 200.0 degrees celsius, place {object-name} in blue box.

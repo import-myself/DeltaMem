@@ -1,0 +1,18 @@
+# PR-Tree Dependencies
+
+# Core dependencies
+numpy>=1.21.0
+sentence-transformers>=2.2.0
+
+# Utilities
+pathlib2>=2.3.7  # For Python < 3.4 compatibility
+
+# Optional: For ALFWorld integration
+# alfworld>=0.3.0
+# gym>=0.21.0
+
+# Optional: For LLM integration
+# openai>=1.0.0
+# anthropic>=0.5.0
+# torch>=2.0.0
+# transformers>=4.30.0

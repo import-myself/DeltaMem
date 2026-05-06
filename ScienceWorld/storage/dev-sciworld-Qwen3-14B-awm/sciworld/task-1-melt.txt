@@ -1,0 +1,6 @@
+## Melt Substance Workflow
+Given a substance that needs to be melted using a heat source, this workflow outlines the steps to locate the substance, apply heat, and complete the melting process.
+Step 1: {locate heat source} and activate it.
+Step 2: {locate substance} and place it near the heat source.
+Step 3: {apply heat} to the substance until it melts.
+Step 4: {focus on melted substance} to complete the task.

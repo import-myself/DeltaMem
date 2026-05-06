@@ -1,0 +1,9 @@
+## find-plant-and-move-to-box
+Given a task to find a plant and move it to a specific container in another room, this workflow locates the plant and transfers it to the target container.
+Step 1: teleport to {location} containing {plant}
+Step 2: look around
+Step 3: focus on {plant}
+Step 4: pick up {plant}
+Step 5: teleport to {target-room}
+Step 6: look around
+Step 7: move {plant} to {target-container}

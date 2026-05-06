@@ -1,0 +1,16 @@
+## fruit-salad-creation
+Given a kitchen environment with a recipe and ingredients, this workflow creates fruit salad by gathering and mixing the required fruits.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: examine {object-name}
+Step 4: read {object-name}
+Step 5: pick up {object-name} from {container}
+Step 6: teleport to {location}
+Step 7: pick up {object-name}
+Step 8: teleport to {location}
+Step 9: pour {substance} from {container} into {container}
+Step 10: teleport to {location}
+Step 11: pick up {object-name}
+Step 12: pour {object-name} into {container}
+Step 13: move {object-name} to {container}
+Step 14: mix {container}

@@ -1,0 +1,4 @@
+## measure-temperature-and-sort
+Given a thermometer and an unknown substance, this workflow measures the temperature of the substance and places it in the appropriate box based on the temperature reading.
+Step 1: use thermometer on {object-name}
+Step 2: if {target-value} > 100.0, place {object-name} in orange box; else, place {object-name} in yellow box

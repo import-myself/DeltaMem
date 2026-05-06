@@ -1,0 +1,7 @@
+## find-shortest-lived-animal
+Given a set of animals in a location, this workflow identifies the animal with the shortest life span.
+Step 1: teleport to {location}
+Step 2: look around
+Step 3: examine {animal}
+Step 4: examine {another-animal}
+Step 5: focus on {shortest-lived-animal}

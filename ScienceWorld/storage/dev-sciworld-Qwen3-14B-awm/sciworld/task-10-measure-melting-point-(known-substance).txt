@@ -1,0 +1,6 @@
+## measure-melting-point-known-substance
+Given a known substance and a thermometer, this workflow measures the melting point of the substance and directs the agent to focus on a specific box based on the measured temperature.
+Step 1: focus on thermometer
+Step 2: focus on {object-name}
+Step 3: use thermometer on {object-name}
+Step 4: if temperature is above {target-value}, focus on {object-name}; else, focus on {object-name}

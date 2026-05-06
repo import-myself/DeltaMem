@@ -1,0 +1,6 @@
+## identify-life-stages-workflow
+Given a set of plants in different life stages, this workflow identifies and focuses on the life stages in order from earliest to latest.  
+Step 1: focus on {object-name} in {object-name}  
+Step 2: focus on {object-name} in {object-name}  
+Step 3: focus on {object-name} in {object-name}  
+Step 4: focus on {object-name} in {object-name}
