@@ -661,7 +661,7 @@ class DualTreeMind2WebAgent:
         return header + "\n".join(failed_lines)
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
-        """鲁棒地解析 JSON，多层降级策略"""
+        """解析 JSON，降级时始终返回 Skill 格式"""
         raw = response.strip()
         if "```json" in raw:
             raw = raw.split("```json")[1].split("```")[0].strip()
@@ -679,7 +679,7 @@ class DualTreeMind2WebAgent:
         except json.JSONDecodeError:
             pass
 
-        # 尝试新 Skill 格式
+        # 正则提取 Skill 字段
         ac = re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
         ep = re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
         tc = re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
@@ -688,15 +688,6 @@ class DualTreeMind2WebAgent:
                 "activation_condition": ac.group(1).replace("\n", " ").strip(),
                 "execution_procedure": ep.group(1).replace("\n", " ").strip(),
                 "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
-            }
-
-        # 旧格式降级
-        md = re.search(r'"memory_description"\s*:\s*"(.*?)"(?=\s*,\s*"content_body"|\s*})', raw, re.DOTALL)
-        cb = re.search(r'"content_body"\s*:\s*"(.*?)"(?=\s*})', raw, re.DOTALL)
-        if md and cb:
-            return {
-                "memory_description": md.group(1).replace("\n", " ").strip(),
-                "content_body": cb.group(1).replace("\n", " ").strip(),
             }
 
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")

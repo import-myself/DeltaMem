@@ -1,6 +1,6 @@
 """
-Dual Memory Reader (v7.0 - Skill Format)
-双树记忆读取器：支持 Skill 格式渲染，向后兼容旧格式
+Dual Memory Reader (v7.0 - Skill Format Only)
+双树记忆读取器：仅渲染 Skill 格式字段
 """
 
 import logging
@@ -19,35 +19,23 @@ class DualMemoryReader:
     def _is_empty_path(self, path: List[MemoryNode]) -> bool:
         if not path:
             return True
-        if len(path) == 1:
-            desc = path[0].payload.get("scenario_description", "")
-            if "GLOBAL_ROOT_PLACEHOLDER" in desc:
-                return True
+        if len(path) == 1 and "GLOBAL_ROOT_PLACEHOLDER" in path[0].payload.get("scenario_description", ""):
+            return True
         return False
 
-    def _render_node_skill(self, node: MemoryNode, item_idx: int, label: str) -> str:
-        """渲染单个节点：优先使用 Skill 字段，回退到旧格式"""
+    def _is_placeholder(self, node: MemoryNode) -> bool:
+        return "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", "")
+
+    def _render_node(self, node: MemoryNode, idx: int, label: str) -> str:
         payload = node.payload
         is_success = node.meta.get("result_status") == ResultStatus.SUCCESS
         status_label = "✅ SUCCESS" if is_success else "⚠️ FAILURE (learn what to AVOID)"
 
-        activation = payload.get("activation_condition")
-        execution = payload.get("execution_procedure")
-        termination = payload.get("termination_condition")
-
-        text = f"## {label} {item_idx} [{status_label}]\n"
-
-        if activation and execution:
-            # 新 Skill 格式
-            text += f"- **Activation Condition**: {activation}\n"
-            text += f"- **Execution Procedure**:\n{execution}\n"
-            if termination:
-                text += f"- **Termination Condition**: {termination}\n"
-        else:
-            # 旧格式回退
-            text += f"- Summary: {payload.get('memory_description', '')}\n"
-            text += f"- Guidance:\n{payload.get('content_body', '')}\n"
-
+        text = f"## {label} {idx} [{status_label}]\n"
+        text += f"- **Activation Condition**: {payload['activation_condition']}\n"
+        text += f"- **Execution Procedure**:\n{payload['execution_procedure']}\n"
+        if payload.get("termination_condition"):
+            text += f"- **Termination Condition**: {payload['termination_condition']}\n"
         return text + "\n"
 
     # =====================================================================
@@ -58,12 +46,12 @@ class DualMemoryReader:
         if self._is_empty_path(task_path):
             return None
         text = ""
-        item_idx = 0
+        idx = 0
         for node in task_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
+            if self._is_placeholder(node):
                 continue
-            item_idx += 1
-            text += self._render_node_skill(node, item_idx, "Task Skill")
+            idx += 1
+            text += self._render_node(node, idx, "Task Skill")
         return text if text.strip() else None
 
     # =====================================================================
@@ -74,12 +62,12 @@ class DualMemoryReader:
         if self._is_empty_path(env_path):
             return None
         text = ""
-        item_idx = 0
+        idx = 0
         for node in env_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
+            if self._is_placeholder(node):
                 continue
-            item_idx += 1
-            text += self._render_node_skill(node, item_idx, "Environment Skill")
+            idx += 1
+            text += self._render_node(node, idx, "Environment Skill")
         return text if text.strip() else None
 
     # =====================================================================
@@ -103,15 +91,15 @@ class DualMemoryReader:
         if task_text:
             sections.append(
                 "# Task Strategy Memory\n"
-                "The following are skill-based experiences from similar task types.\n"
-                "⚠️ Any element IDs mentioned are from past episodes and DO NOT apply here.\n\n"
+                "Skill-based experiences from similar task types. "
+                "Any element IDs are from past episodes — DO NOT use them.\n\n"
                 f"{task_text}"
             )
         if env_text:
             sections.append(
-                "# Website Knowledge Memory\n"
-                "The following are skill-based experiences from the same or related website/environment.\n"
-                "⚠️ Any element IDs mentioned are from past episodes and DO NOT apply here.\n\n"
+                "# Environment/Website Knowledge Memory\n"
+                "Skill-based experiences from the same or related environment/website. "
+                "Any element IDs are from past episodes — DO NOT use them.\n\n"
                 f"{env_text}"
             )
         return "\n---\n\n".join(sections)
@@ -129,25 +117,18 @@ class DualMemoryReader:
         if self._is_empty_path(path):
             return ""
         text = ""
-        item_idx = 0
+        idx = 0
         for node in path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
+            if self._is_placeholder(node):
                 continue
-            item_idx += 1
+            idx += 1
             payload = node.payload
             status = "SUCCESS" if node.meta["result_status"] == ResultStatus.SUCCESS else "FAILURE"
-            activation = payload.get("activation_condition")
-            execution = payload.get("execution_procedure")
-
-            text += f"[Existing Skill {item_idx}] (Status: {status})\n"
-            if activation and execution:
-                text += f"  Activation: {activation}\n"
-                text += f"  Execution: {execution}\n"
-                if payload.get("termination_condition"):
-                    text += f"  Termination: {payload['termination_condition']}\n"
-            else:
-                text += f"  Description: {payload.get('memory_description', '')}\n"
-                text += f"  Content: {payload.get('content_body', '')}\n"
+            text += f"[Existing Skill {idx}] (Status: {status})\n"
+            text += f"  Activation: {payload['activation_condition']}\n"
+            text += f"  Execution: {payload['execution_procedure']}\n"
+            if payload.get("termination_condition"):
+                text += f"  Termination: {payload['termination_condition']}\n"
             text += "\n"
         return text
 

@@ -1,7 +1,6 @@
 """
-Dual Memory Writer (v5.0 - Skill Format)
-双树记忆写入器：支持新 Skill 格式 (activation_condition / execution_procedure / termination_condition)
-同时保持对旧格式 (memory_description / content_body) 的向后兼容
+Dual Memory Writer (v5.0 - Skill Format Only)
+双树记忆写入器：仅支持新 Skill 格式 (activation_condition / execution_procedure / termination_condition)
 """
 
 import re
@@ -26,41 +25,6 @@ def _sanitize_content(content: str) -> str:
     return cleaned
 
 
-def _normalize_reflection(reflection: Dict[str, Any]) -> Dict[str, str]:
-    """
-    将新 Skill 格式或旧格式的 reflection dict 统一规范化。
-
-    新格式: {"activation_condition": ..., "execution_procedure": ..., "termination_condition": ...}
-    旧格式: {"memory_description": ..., "content_body": ...}
-
-    Returns: dict with all 5 keys guaranteed
-    """
-    has_new = "activation_condition" in reflection and "execution_procedure" in reflection
-
-    if has_new:
-        activation = reflection.get("activation_condition", "")
-        execution = reflection.get("execution_procedure", "")
-        termination = reflection.get("termination_condition", "")
-        # 兼容渲染管道：memory_description = activation_condition 摘要
-        memory_desc = reflection.get("memory_description") or activation
-        content_body = reflection.get("content_body") or execution
-    else:
-        # 旧格式降级
-        memory_desc = reflection.get("memory_description", "")
-        content_body = reflection.get("content_body", "")
-        activation = memory_desc
-        execution = content_body
-        termination = reflection.get("termination_condition", "")
-
-    return {
-        "memory_description": memory_desc,
-        "content_body": content_body,
-        "activation_condition": activation,
-        "execution_procedure": execution,
-        "termination_condition": termination,
-    }
-
-
 class DualMemoryWriter:
     def __init__(self, dual_memory: DualTreeMemory):
         self.dual_memory = dual_memory
@@ -74,18 +38,12 @@ class DualMemoryWriter:
         logger.warning(f"Anchor node {last_node.node_id[:8]} not found. Fallback to Root.")
         return tree.root
 
-    def _is_root_path(self, path: Optional[List[MemoryNode]], tree_name: str) -> bool:
+    def _is_root_path(self, path: Optional[List[MemoryNode]]) -> bool:
         if not path:
             return True
-        if len(path) == 1:
-            desc = path[0].payload.get("scenario_description", "")
-            if "GLOBAL_ROOT_PLACEHOLDER" in desc:
-                return True
+        if len(path) == 1 and "GLOBAL_ROOT_PLACEHOLDER" in path[0].payload.get("scenario_description", ""):
+            return True
         return False
-
-    # =====================================================================
-    # 内部写入（共用逻辑）
-    # =====================================================================
 
     def _write_to_tree(
         self,
@@ -98,34 +56,37 @@ class DualMemoryWriter:
         retrieved_path: Optional[List[MemoryNode]],
         tree_label: str,
     ) -> MemoryNode:
-        norm = _normalize_reflection(reflection)
+        activation = reflection["activation_condition"]
+        execution = _sanitize_content(reflection["execution_procedure"])
+        termination = reflection.get("termination_condition", "")
+
         anchor_node = self._determine_anchor(tree, retrieved_path)
 
-        if self._is_root_path(retrieved_path, tree_label):
-            logger.info(f"[{tree_label}] Writing new ROOT SCHEMA (Zero-shot).")
+        if self._is_root_path(retrieved_path):
+            logger.info(f"[{tree_label}] Writing ROOT SCHEMA (Zero-shot).")
             node = add_root_fn(
                 scenario_description=scenario_description,
-                memory_description=norm["memory_description"],
-                content_body=_sanitize_content(norm["content_body"]),
-                result_status=status
+                memory_description=activation,
+                content_body=execution,
+                result_status=status,
             )
         else:
             logger.info(f"[{tree_label}] Writing RESIDUAL under anchor: {anchor_node.node_id[:8]}")
             node = add_experience_fn(
                 anchor_node=anchor_node,
                 scenario_description=scenario_description,
-                memory_description=norm["memory_description"],
-                content_body=_sanitize_content(norm["content_body"]),
+                memory_description=activation,
+                content_body=execution,
                 result_status=status,
-                force_sibling=False
+                force_sibling=False,
             )
 
         # 写入 Skill 字段
-        node.payload["activation_condition"] = norm["activation_condition"]
-        node.payload["execution_procedure"] = _sanitize_content(norm["execution_procedure"])
-        node.payload["termination_condition"] = norm["termination_condition"]
+        node.payload["activation_condition"] = activation
+        node.payload["execution_procedure"] = execution
+        node.payload["termination_condition"] = termination
 
-        # 更新 hit_count on retrieved path nodes
+        # 命中路径节点的 hit_count +1
         if retrieved_path:
             for path_node in retrieved_path:
                 if "GLOBAL_ROOT_PLACEHOLDER" not in path_node.payload.get("scenario_description", ""):
@@ -133,16 +94,12 @@ class DualMemoryWriter:
 
         return node
 
-    # =====================================================================
-    # 任务树写入
-    # =====================================================================
-
     def write_task_experience(
         self,
         scenario_description: str,
         reflection: Dict[str, Any],
         status: Union[str, ResultStatus],
-        retrieved_path: Optional[List[MemoryNode]] = None
+        retrieved_path: Optional[List[MemoryNode]] = None,
     ) -> MemoryNode:
         return self._write_to_tree(
             tree=self.dual_memory.task_tree,
@@ -155,16 +112,12 @@ class DualMemoryWriter:
             tree_label="TaskTree",
         )
 
-    # =====================================================================
-    # 环境树写入
-    # =====================================================================
-
     def write_env_experience(
         self,
         scenario_description: str,
         reflection: Dict[str, Any],
         status: Union[str, ResultStatus],
-        retrieved_path: Optional[List[MemoryNode]] = None
+        retrieved_path: Optional[List[MemoryNode]] = None,
     ) -> MemoryNode:
         return self._write_to_tree(
             tree=self.dual_memory.env_tree,
@@ -177,10 +130,6 @@ class DualMemoryWriter:
             tree_label="EnvTree",
         )
 
-    # =====================================================================
-    # 统一写入接口（向后兼容）
-    # =====================================================================
-
     def write_dual_experience(
         self,
         task_description: str,
@@ -189,7 +138,7 @@ class DualMemoryWriter:
         env_reflection: Dict[str, Any],
         status: Union[str, ResultStatus],
         task_retrieved_path: Optional[List[MemoryNode]] = None,
-        env_retrieved_path: Optional[List[MemoryNode]] = None
+        env_retrieved_path: Optional[List[MemoryNode]] = None,
     ) -> Dict[str, MemoryNode]:
         task_node = self.write_task_experience(
             scenario_description=task_description,

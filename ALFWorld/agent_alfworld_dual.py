@@ -490,33 +490,28 @@ class DualTreeReflectiveAgent:
         return task_reflection, env_reflection
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
-        """\u9c81\u68d2\u5730\u89e3\u6790 JSON\uff0c\u591a\u5c42\u964d\u7ea7\u7b56\u7565"""
+        """\u89e3\u6790 JSON\uff0c\u964d\u7ea7\u65f6\u59cb\u7ec8\u8fd4\u56de Skill \u683c\u5f0f"""
         raw = response.strip()
-
-        # Step 1: \u63d0\u53d6\u4ee3\u7801\u5757\u5185\u5bb9
         if "```json" in raw:
             raw = raw.split("```json")[1].split("```")[0].strip()
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
 
-        # Step 2: \u76f4\u63a5\u89e3\u6790\uff08strict=False \u5141\u8bb8\u63a7\u5236\u5b57\u7b26\uff09
         try:
             return json.loads(raw, strict=False)
         except json.JSONDecodeError:
             pass
 
-        # Step 3: \u7528 re \u6e05\u7406\u88f8\u63a7\u5236\u5b57\u7b26\u540e\u518d\u89e3\u6790
-        import re as _re
-        cleaned = _re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
         try:
             return json.loads(cleaned, strict=False)
         except json.JSONDecodeError:
             pass
 
-        # Step 4: \u5c1d\u8bd5\u63d0\u53d6\u65b0 Skill \u683c\u5f0f\u5b57\u6bb5
-        ac = _re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
-        ep = _re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
-        tc = _re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
+        # \u6b63\u5219\u63d0\u53d6 Skill \u5b57\u6bb5
+        ac = re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        ep = re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        tc = re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
         if ac and ep:
             return {
                 "activation_condition": ac.group(1).replace("\n", " ").strip(),
@@ -524,19 +519,6 @@ class DualTreeReflectiveAgent:
                 "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
             }
 
-        # Step 5: \u5c1d\u8bd5\u63d0\u53d6\u65e7\u683c\u5f0f\u5b57\u6bb5
-        md = _re.search(
-            r'"memory_description"\s*:\s*"(.*?)"(?=\s*,\s*"content_body"|\s*})',
-            raw, _re.DOTALL
-        )
-        cb = _re.search(r'"content_body"\s*:\s*"(.*?)"(?=\s*})', raw, _re.DOTALL)
-        if md and cb:
-            return {
-                "memory_description": md.group(1).replace("\n", " ").strip(),
-                "content_body": cb.group(1).replace("\n", " ").strip(),
-            }
-
-        # Step 6: \u6700\u7ec8\u964d\u7ea7
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")
         summary = raw[:120].replace('"', "'").replace("\n", " ").strip()
         return {
