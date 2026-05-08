@@ -265,8 +265,8 @@ class DualTreeMemory:
             "env_tree_nodes": 1,
         }
 
-        # Skill 补丁缓存（快思考路径）
-        self.skill_cache = SkillCache()
+        # Skill 补丁缓存（快思考路径），传入 retriever 以使用 embedding 匹配
+        self.skill_cache = SkillCache(retriever=self.retriever)
         self._skill_compiler = SkillCompiler()
 
         # 尝试加载
