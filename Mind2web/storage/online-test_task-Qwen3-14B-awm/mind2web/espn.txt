@@ -1,4 +1,0 @@
-## find-team-schedule
-Given a team name, this workflow navigates to the team's schedule page.
-[link] NBA link -> ACTION: {team-name}
-[link] Schedule link -> ACTION: {team-name}

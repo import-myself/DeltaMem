@@ -1,4 +1,0 @@
-## browse-hot-deals-by-location
-Given a location (e.g., zip code), this workflow navigates to the "Hot Deals" section and searches for deals near the specified location.
-[LINK] Deals -> ACTION: {target-section}
-[TEXTBOX] CITY, STATE OR ZIP -> ACTION: {location}

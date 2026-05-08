@@ -1,7 +1,0 @@
-## Check AMC Gift Card Balance
-Given a gift card number and pin, this workflow checks the balance of an AMC gift card.
-[menuitem] Go to gift cards page -> ACTION: {gift-card-menu-item}
-[button] Check Gift Card Balance -> ACTION: {check-balance-button}
-[input] Gift Card Number -> ACTION: {gift-card-number}
-[spinbutton] Gift Card Pin -> ACTION: {gift-card-pin}
-[button] Search -> ACTION: {search-button}

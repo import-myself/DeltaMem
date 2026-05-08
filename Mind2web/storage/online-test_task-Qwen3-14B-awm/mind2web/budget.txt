@@ -1,6 +1,0 @@
-## Download E-Receipt
-Given a confirmation number and last name, this workflow downloads the corresponding e-receipt.
-[button] Get e-Receipt -> ACTION: {receipt-link}
-[textbox] Last Name -> ACTION: {last-name}
-[textbox] Confirmation/Rental Agreement Number -> ACTION: {confirmation-number}
-[button] Get Receipt -> ACTION: {download-button}
