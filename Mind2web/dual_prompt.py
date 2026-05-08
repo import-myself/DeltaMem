@@ -1,17 +1,11 @@
 """
-Dual PR-Tree Prompt Templates for Mind2Web (v5.0)
+Dual PR-Tree Prompt Templates for Mind2Web (v6.0 - Skill Format)
 
-双树设计:
-- TaskTree:    以任务类型为索引 (e.g. "flight_booking", "product_search_filter")
-               存储通用的任务类型策略、语义化元素识别启发式、常见误操作模式
-- WebsiteTree: 以 domain::website 为索引 (e.g. "travel::united", "shopping::kohls")
-               存储网站特有 UI 组件布局、交互规则、网站操作陷阱
-
-v5.0 核心变化:
-- 明确禁止在记忆中存储 backend_node_id (形如 [1234] 的数字 ID)
-  ——这类 ID 是 episode 独有的，跨任务完全无效，存入记忆会误导 Agent
-- content_body 改为结构化格式：任务类别 → 元素语义识别策略 → 操作陷阱
-- Env Tree 以组件类型为粒度，要求描述交互方式而非抽象评论
+v6.0 核心改进:
+- 反思 Prompt 重构为面向 Skill 的格式：activation_condition / execution_procedure / termination_condition
+- Root 节点 → Base Skill（基础任务技能提取）
+- Residual 节点 → Skill Delta（技能修正残差）
+- 保留 element ID 禁止规则
 """
 
 # =================================================================
@@ -68,15 +62,7 @@ Now, it's your turn and here is the task.
 {task}"""
 
 # =================================================================
-# 任务树反思 Prompt (Task Tree)
-# 索引键: 任务类别 (e.g. "flight_booking", "product_search_filter")
-# 存储内容: 语义化元素识别策略 / 操作步骤模板 / 常见误操作
-#
-# ⚠️ CRITICAL RULE FOR ALL TASK TREE PROMPTS:
-#   NEVER include element IDs ([number]) in content_body.
-#   Backend node IDs are unique per episode and meaningless in other tasks.
-#   Always describe elements by: role, type, aria-label, placeholder,
-#   visible text content, or structural position (e.g. "top header", "sidebar").
+# 公共约束块
 # =================================================================
 
 _TASK_ID_PROHIBITION = """\
@@ -91,8 +77,8 @@ Describe elements ONLY by their semantic attributes:
   • Interaction behavior: "a dropdown that opens on CLICK", "an autocomplete that shows suggestions after typing 3+ characters"\
 """
 
-_TASK_CONTENT_FORMAT = """\
-Required format for "content_body":
+_EXECUTION_FORMAT = """\
+Required format for `execution_procedure`:
 
 Task Category: [Exactly one of: flight_booking | hotel_booking | rental_booking |
   product_search_filter | form_fill_submit | event_booking |
@@ -101,39 +87,33 @@ Task Category: [Exactly one of: flight_booking | hotel_booking | rental_booking 
 Element Identification Strategies:
 - For [step description, e.g. "origin city / autocomplete input"]:
     Identify: [semantic description — role, aria-label, placeholder, visible text, position]
-    Interact: [exact action type and sequence, e.g. "TYPE to trigger autocomplete, then CLICK matching suggestion — do NOT press Enter before selecting"]
-    Value format: [what value to pass — e.g. "city name only, not airport code", "exact visible option text for SELECT"]
+    Interact: [exact action type and sequence]
+    Value format: [what value to pass]
 - For [next step type]: ...
 
-Element Disambiguation Rules (critical for candidate selection):
+Element Disambiguation Rules:
 - Component: [e.g. "origin city autocomplete"]
-    Correct element signals: [aria-label/placeholder/text that marks the RIGHT element, e.g. "aria-label contains 'departure'/'from'/'origin'"]
-    Confusable elements to avoid: [what nearby elements look similar but are wrong, e.g. "destination input has aria-label 'to'/'arrival'"]
-- Component: [another component that caused confusion in this task]
-    Correct element signals: [...]
-    Confusable elements to avoid: [...]
+    Correct element signals: [aria-label/placeholder/text that marks the RIGHT element]
+    Confusable elements to avoid: [what nearby elements look similar but are wrong]
 
 Action Sequence Outline:
 1. [What to do — describe element semantically, NOT by ID]
 2. ...
-(List the key steps in order; omit trivial ones)
 
 Key Pitfalls to Avoid:
 - [Specific mistake → correct approach, using semantic descriptions only]\
 """
 
+
+# =================================================================
+# 任务树反思 Prompt (Task Tree) — Skill 格式
+# =================================================================
+
 TaskTree_Prompt_Map = {}
 
-TaskTree_Prompt_Map['root_success'] = """You have successfully completed a web navigation task.
-Your job: Extract a **generalizable task strategy** for future agents handling similar web tasks.
+TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Based on this successful web navigation trajectory, extract a **Base Skill** for this task type.
 
 {id_prohibition}
-
-**Focus on TASK STRATEGY — transferable across different websites:**
-- What category of web task is this?
-- What UI component types appear in this task and how to identify them semantically?
-- What is the correct interaction sequence for each component type?
-- What decision points or common pitfalls exist?
 
 **Full Scenario:**
 Website: {{env_description}}
@@ -144,28 +124,24 @@ Trajectory:
 {{trajectory}}
 
 **Output Requirements:**
-1. "content_body" must be fully self-contained and understandable without seeing the trajectory.
-2. Describe the task category explicitly.
-3. Use ONLY semantic element descriptions — no element IDs.
-4. Be concrete and actionable.
+Your output will be placed in a global skill cache and triggered DIRECTLY with NO access to this trajectory.
 
-{content_format}
+Output a **self-contained Base Skill** as JSON:
+- `activation_condition`: The task TYPE + website context that triggers this skill (e.g., "for flight booking tasks on travel websites where user must search for one-way flights"). Describe using semantic task features, NOT element IDs.
+- `execution_procedure`: Complete self-contained procedure. Follow this format:
+{execution_format}
+- `termination_condition`: When to consider this web task skill complete (e.g., "search results page loaded with results, or confirmation page displayed").
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs anywhere):
 {{{{
-    "memory_description": "One sentence: task category + key workflow insight (no element IDs).",
-    "content_body": "<follow the format above exactly>"
-}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, content_format=_TASK_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, execution_format=_EXECUTION_FORMAT)
 
-TaskTree_Prompt_Map['root_failure'] = """You attempted a web navigation task but FAILED.
-Your job: Generate a **corrective task strategy** so future agents avoid the same mistake.
+TaskTree_Prompt_Map['root_failure'] = """You are a Skill Extractor. Based on this FAILED web navigation trajectory, extract a **corrective Base Skill**.
 
 {id_prohibition}
-
-**Focus on TASK STRATEGY — what went wrong and how to fix it:**
-- What category of web task is this?
-- At which step did the workflow fail, and why?
-- What is the correct element identification approach and interaction sequence?
 
 **Full Scenario:**
 Website: {{env_description}}
@@ -175,29 +151,28 @@ Result: FAILURE (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Step-Level Failure Analysis (element selection errors):**
+**Step-Level Failure Analysis:**
 {{failed_steps_analysis}}
 
 **Output Requirements:**
-1. "content_body" must be fully self-contained.
-2. Describe the task category explicitly.
-3. Use ONLY semantic element descriptions — no element IDs.
-4. Be concrete — for each failed step, describe what the correct element looks like (aria-label, placeholder, position) to distinguish it from confusable candidates.
+Output a **self-contained corrective Base Skill** as JSON:
+- `activation_condition`: Task type + what went wrong (e.g., "for flight booking tasks where agent selects wrong input for origin city").
+- `execution_procedure`: Corrected procedure with explicit error-avoidance rules. No element IDs.
+{execution_format}
+- `termination_condition`: When this corrective skill is complete.
 
-{content_format}
-
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs anywhere):
 {{{{
-    "memory_description": "One sentence: task category + what went wrong + how to fix it (no element IDs).",
-    "content_body": "<follow the format above exactly>"
-}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, content_format=_TASK_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, execution_format=_EXECUTION_FORMAT)
 
-TaskTree_Prompt_Map['node_success'] = """You successfully completed a web task. Existing task strategy memories are stored.
-Your job: Identify what **NEW strategic insight** this experience adds that is NOT already covered.
+TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract the **Task Skill Delta** — what NEW strategic knowledge this trajectory adds beyond existing memories.
 
 {id_prohibition}
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {{retrieved_task_memory}}
 === END ===
 
@@ -209,35 +184,28 @@ Result: SUCCESS (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Residual Generation Instructions:**
-1. READ existing memories carefully. List what element types and strategies they already cover.
-2. ANALYZE this trajectory. Find genuinely NEW knowledge:
-   - A different UI component type not previously described
-   - A more precise semantic identification strategy for an existing component type
-   - An edge case or recovery pattern not covered
-   - A more efficient interaction sequence variant
-3. Output ONLY new incremental knowledge. DO NOT repeat existing memories.
-
 **Output Requirements:**
-1. "content_body" must be self-contained.
-2. Mention the task category.
-3. Use ONLY semantic element descriptions — no element IDs.
-4. The new knowledge must genuinely differ from all existing memories.
+1. READ existing memories. List what element types and strategies they cover.
+2. FIND genuinely NEW knowledge: a different UI component type, more precise identification, edge case, or efficiency improvement.
+3. Output ONLY the new Skill Delta as JSON. Must genuinely differ from existing conditions.
 
-{content_format}
+- `activation_condition`: The SPECIFIC NEW trigger — new UI pattern, edge case, or condition NOT covered by existing skills. No element IDs.
+- `execution_procedure`: The NEW incremental steps/rules only. Self-contained, no references to existing memories.
+{execution_format}
+- `termination_condition`: When this delta's modification is complete.
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs anywhere):
 {{{{
-    "memory_description": "One sentence about the NEW insight only. Must differ from all existing (no element IDs).",
-    "content_body": "<follow the format above exactly, focusing only on the new insight>"
-}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, content_format=_TASK_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, execution_format=_EXECUTION_FORMAT)
 
-TaskTree_Prompt_Map['node_failure'] = """You attempted a web task but FAILED despite existing task strategy memories.
-Your job: Identify the **specific gap** in existing strategies that caused the failure.
+TaskTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor. Identify the **gap in existing task skills** that caused this failure.
 
 {id_prohibition}
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {{retrieved_task_memory}}
 === END ===
 
@@ -249,40 +217,29 @@ Result: FAILURE (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Step-Level Failure Analysis (element selection errors):**
+**Step-Level Failure Analysis:**
 {{failed_steps_analysis}}
 
-**Residual Generation Instructions:**
-1. READ existing memories. What do they recommend?
-2. ANALYZE the failure using the step-level analysis above. At which step did things go wrong?
-   - Was the element identification description insufficient (wrong candidate selected)?
-   - Was the interaction sequence wrong for this component type?
-   - Was there an edge case the existing strategies missed?
-3. For each failed step: describe what distinguishes the CORRECT element from confusable candidates.
-4. Identify the SPECIFIC gap. Output ONLY gap-filling correction.
-
 **Output Requirements:**
-1. "content_body" must be self-contained.
-2. Mention the task category.
-3. Use ONLY semantic element descriptions — no element IDs.
+1. READ existing skills. What element types and strategies do they cover?
+2. IDENTIFY the specific gap: wrong element identification, incorrect interaction, or uncovered edge case.
+3. Output ONLY the corrective Skill Delta as JSON.
 
-{content_format}
+- `activation_condition`: The specific new situation the existing skills failed to handle.
+- `execution_procedure`: The corrective rules for the gap. Self-contained, semantic descriptions only.
+{execution_format}
+- `termination_condition`: When this corrective delta is complete.
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs anywhere):
 {{{{
-    "memory_description": "One sentence: specific gap + correction. Must differ from existing (no element IDs).",
-    "content_body": "<follow the format above exactly, focusing only on the gap and fix>"
-}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, content_format=_TASK_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_TASK_ID_PROHIBITION, execution_format=_EXECUTION_FORMAT)
 
 
 # =================================================================
-# 网站树反思 Prompt (Website/Env Tree)
-# 索引键: domain::website (e.g. "travel::united", "shopping::kohls")
-# 存储内容: 网站特有 UI 组件位置、交互规则、操作陷阱
-#
-# ⚠️ CRITICAL RULE FOR ALL ENV TREE PROMPTS:
-#   NEVER include element IDs in content_body.
-#   Describe UI components by their visual/structural properties.
+# 网站树反思 Prompt (Website/Env Tree) — Skill 格式
 # =================================================================
 
 _ENV_ID_PROHIBITION = """\
@@ -295,56 +252,36 @@ Describe UI components ONLY by their observable properties:
   • Interaction trigger: "opens on CLICK", "requires hover to reveal", "appears after typing"\
 """
 
-_ENV_CONTENT_FORMAT = """\
-Required format for "content_body":
+_ENV_EXECUTION_FORMAT = """\
+Required format for `execution_procedure`:
 
 Website Type: [e.g. travel-booking | e-commerce | entertainment | news | finance | rental | other]
-Website: [name as provided in env_description]
-Task Category on This Website: [e.g. flight_booking, product_search_filter]
+Website: [name as provided]
+Task Category: [e.g. flight_booking, product_search_filter]
 
 Key UI Components and Interaction Rules:
 - Search / Text Input:
-    Location: [where on page, e.g. "top header bar", "center of homepage"]
+    Location: [where on page]
     Identification: [aria-label, placeholder, or visible label]
-    Interaction: [e.g. "TYPE query, then press Enter" or "TYPE to trigger autocomplete, then CLICK suggestion"]
-    Value format: [e.g. "type city name only, not airport code", "partial text triggers dropdown"]
+    Interaction: [TYPE/CLICK sequence]
+    Value format: [what to pass]
+- Date Picker (if present): [identification, interaction, value format]
+- Dropdown / SELECT (if present): [identification, interaction, value format]
+- Autocomplete Input (if present): [identification, interaction, value format]
+- Submit Button (if present): [identification, interaction]
 
-- Date Picker (if present):
-    Identification: [e.g. "input with aria-label containing 'date'", "calendar icon button"]
-    Interaction: [e.g. "CLICK to open calendar overlay, then CLICK target date — do NOT TYPE date directly"]
-    Value format: [e.g. "calendar date cells use MM/DD/YYYY format visible on cell"]
-
-- Dropdown / SELECT (if present):
-    Identification: [e.g. "labeled 'Sort by'", "role='listbox'"]
-    Interaction: [e.g. "use SELECT action with EXACT visible option text"]
-    Value format: [e.g. "option values are visible display strings like 'Price: Low to High', not internal codes"]
-
-- Autocomplete Input (if present):
-    Identification: [e.g. "city input with placeholder 'Enter city'"]
-    Interaction: [e.g. "TYPE 3+ characters, wait for suggestion list, then CLICK the matching suggestion — do NOT submit before selecting"]
-    Value format: [e.g. "type just the city name; full suggestion text is selected by CLICK"]
-
-- Submit / Confirm Button (if present):
-    Identification: [e.g. "button labeled 'Search Flights'", "button in the form footer"]
-    Interaction: [e.g. "CLICK after all fields are filled"]
-
-Element Disambiguation Rules (for candidate selection):
+Element Disambiguation Rules:
 - Component: [e.g. "departure city input"]
-    Correct element signals: [specific aria-label, placeholder, or structural position that identifies the right element among candidates]
-    Confusable with: [what other candidate elements look similar, and how to tell them apart]
-- Component: [another component if applicable]
-    Correct element signals: [...]
-    Confusable with: [...]
+    Correct element signals: [aria-label, placeholder, or structural position]
+    Confusable with: [similar elements to avoid]
 
 Known Website-Specific Traps:
-- [Specific pitfall: what action fails → what the correct action is]
-- [Another trap, described concisely]\
+- [Pitfall: what fails → correct action]\
 """
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You completed a web task on a specific website.
-Your job: Extract **website-specific UI knowledge** — practical patterns for operating on this website.
+EnvTree_Prompt_Map['root_success'] = """You are a Skill Extractor for Website Knowledge. Extract a **Base Website Skill** from this successful web navigation.
 
 {id_prohibition}
 
@@ -357,22 +294,22 @@ Trajectory:
 {{trajectory}}
 
 **Output Requirements:**
-1. "content_body" must be fully self-contained and understandable without seeing the trajectory.
-2. Describe the website type and name explicitly.
-3. Cover key UI component types encountered: how to identify them semantically and how to interact correctly.
-4. Include known pitfalls observed during this trajectory.
-5. Use ONLY semantic/structural descriptions — no element IDs.
+Your output will be triggered DIRECTLY in similar websites with NO access to this trajectory.
 
-{content_format}
+Output a **self-contained Base Website Skill** as JSON:
+- `activation_condition`: Website type + key UI features that make this skill applicable (e.g., "on travel-booking websites like united.com with autocomplete city inputs and calendar date pickers").
+- `execution_procedure`: Complete website-specific UI knowledge.
+{execution_format}
+- `termination_condition`: When website-specific navigation is complete (e.g., "all required form fields filled and search/submit button clicked").
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs):
 {{{{
-    "memory_description": "One sentence: website type + most important operational insight (no element IDs).",
-    "content_body": "<follow the format above exactly>"
-}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, content_format=_ENV_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, execution_format=_ENV_EXECUTION_FORMAT)
 
-EnvTree_Prompt_Map['root_failure'] = """You attempted a web task on a specific website but FAILED.
-Your job: Extract **website-specific warnings** — what UI factors caused the failure and how to avoid them.
+EnvTree_Prompt_Map['root_failure'] = """You are a Skill Extractor for Website Knowledge. Extract a **corrective Base Website Skill** from this failed navigation.
 
 {id_prohibition}
 
@@ -384,29 +321,28 @@ Result: FAILURE (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Step-Level Failure Analysis (element selection errors):**
+**Step-Level Failure Analysis:**
 {{failed_steps_analysis}}
 
 **Output Requirements:**
-1. "content_body" must be fully self-contained.
-2. Describe the website type and name explicitly.
-3. For each failed step, describe: which UI component was involved, what the correct element looks like (aria-label, placeholder, structural position), and what confusable elements exist on this website.
-4. Use ONLY semantic/structural descriptions — no element IDs.
+Output a **self-contained corrective Base Website Skill** as JSON:
+- `activation_condition`: Website type + the specific trap condition that caused failure.
+- `execution_procedure`: Corrective website knowledge with pitfall descriptions and correct interaction rules. No element IDs.
+{execution_format}
+- `termination_condition`: When website-specific pitfalls have been addressed.
 
-{content_format}
-
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs):
 {{{{
-    "memory_description": "One sentence: website type + key pitfall discovered (no element IDs).",
-    "content_body": "<follow the format above exactly>"
-}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, content_format=_ENV_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, execution_format=_ENV_EXECUTION_FORMAT)
 
-EnvTree_Prompt_Map['node_success'] = """You completed a task on a website. Existing website knowledge memories are stored.
-Your job: Identify what **NEW website-specific UI knowledge** this experience adds that is NOT already covered.
+EnvTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor for Website Knowledge. Extract the **Website Skill Delta** — new UI knowledge NOT covered by existing memories.
 
 {id_prohibition}
 
-=== EXISTING WEBSITE MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING WEBSITE SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {{retrieved_env_memory}}
 === END ===
 
@@ -418,35 +354,28 @@ Result: SUCCESS (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Residual Generation Instructions:**
-1. READ existing memories carefully. List which component types and interaction rules they already cover.
-2. ANALYZE this trajectory. Find genuinely NEW website knowledge:
-   - A new component type not previously described
-   - A more precise identification or interaction rule for an existing component
-   - A new navigation shortcut or UI state transition
-   - A new pitfall discovered
-3. Output ONLY new incremental knowledge. DO NOT repeat existing memories.
-
 **Output Requirements:**
-1. "content_body" must be self-contained.
-2. Describe the website explicitly.
-3. Use ONLY semantic/structural descriptions — no element IDs.
-4. The new knowledge must genuinely differ from all existing memories.
+1. READ existing memories. Which component types and interaction rules do they cover?
+2. FIND genuinely NEW website knowledge: new component type, more precise rule, new pitfall.
+3. Output ONLY the new Website Skill Delta as JSON.
 
-{content_format}
+- `activation_condition`: The specific new website condition / UI pattern that activates this delta.
+- `execution_procedure`: NEW website knowledge only. Self-contained.
+{execution_format}
+- `termination_condition`: When this website adaptation is complete.
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs):
 {{{{
-    "memory_description": "One sentence about the NEW insight only. Must differ from all existing (no element IDs).",
-    "content_body": "<follow the format above exactly, focusing only on the new knowledge>"
-}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, content_format=_ENV_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, execution_format=_ENV_EXECUTION_FORMAT)
 
-EnvTree_Prompt_Map['node_failure'] = """You attempted a task on a website but FAILED despite existing website knowledge.
-Your job: Identify what **website knowledge gap** caused the failure.
+EnvTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor for Website Knowledge. Identify the **website knowledge gap** that caused this failure.
 
 {id_prohibition}
 
-=== EXISTING WEBSITE MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING WEBSITE SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {{retrieved_env_memory}}
 === END ===
 
@@ -458,30 +387,25 @@ Result: FAILURE (Steps: {{steps}})
 Trajectory:
 {{trajectory}}
 
-**Step-Level Failure Analysis (element selection errors):**
+**Step-Level Failure Analysis:**
 {{failed_steps_analysis}}
 
-**Residual Generation Instructions:**
-1. READ existing memories. What do they know about this website's UI components?
-2. ANALYZE the failure using the step-level analysis above. Was it caused by:
-   - Wrong identification of a UI component type (selected wrong candidate)?
-   - Incorrect interaction sequence for a component?
-   - A website-specific quirk not previously recorded?
-3. For each failed step, describe the correct vs confusable elements on THIS website.
-4. Identify the SPECIFIC gap. Output ONLY gap-filling knowledge.
-
 **Output Requirements:**
-1. "content_body" must be self-contained.
-2. Describe the website explicitly.
-3. Use ONLY semantic/structural descriptions — no element IDs.
+1. READ existing memories. What do they know about this website's UI?
+2. IDENTIFY the specific gap: wrong component identification, incorrect interaction, or uncovered website quirk.
+3. Output ONLY the corrective Website Skill Delta as JSON.
 
-{content_format}
+- `activation_condition`: The specific new website situation existing memories failed to handle.
+- `execution_procedure`: Corrective website rule. Self-contained, no element IDs.
+{execution_format}
+- `termination_condition`: When this website correction is complete.
 
-**Output (JSON only, no extra text):**
+Output ONLY the JSON (no element IDs):
 {{{{
-    "memory_description": "One sentence: specific website gap. Must differ from existing (no element IDs).",
-    "content_body": "<follow the format above exactly, focusing only on the gap and correction>"
-}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, content_format=_ENV_CONTENT_FORMAT)
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
+}}}}""".format(id_prohibition=_ENV_ID_PROHIBITION, execution_format=_ENV_EXECUTION_FORMAT)
 
 
 # =================================================================

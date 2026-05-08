@@ -60,7 +60,10 @@ class MemoryNode:
             "node_type": NodeType(node_type).value,         # 确保是字符串枚举值
             "result_status": ResultStatus(result_status).value,
             "created_at": int(time.time()),                 # 使用时间戳
-            "usage_count": 0
+            "usage_count": 0,
+            "hit_count": 0,       # 作为成功检索路径一部分时加 1
+            "success_count": 0,   # 利用该节点经验执行任务最终成功时加 1
+            "is_consolidated": False  # 被编译为 Skill 补丁后设为 True
         }
 
         # --- B. 索引 (Index) ---
@@ -72,7 +75,11 @@ class MemoryNode:
         self.payload = {
             "scenario_description": scenario_description,
             "memory_description": memory_description,
-            "content_body": content_body
+            "content_body": content_body,
+            # Skill 字段 (可选, 新写入的节点会填充这些字段)
+            "activation_condition": None,
+            "execution_procedure": None,
+            "termination_condition": None,
         }
 
     @property
@@ -174,7 +181,15 @@ class MemoryNode:
         # 恢复其他元数据
         node.meta["created_at"] = meta.get("created_at", int(time.time()))
         node.meta["usage_count"] = meta.get("usage_count", 0)
-        
+        node.meta["hit_count"] = meta.get("hit_count", 0)
+        node.meta["success_count"] = meta.get("success_count", 0)
+        node.meta["is_consolidated"] = meta.get("is_consolidated", False)
+
+        # 恢复 Skill 字段 (向后兼容旧节点)
+        node.payload["activation_condition"] = payload.get("activation_condition")
+        node.payload["execution_procedure"] = payload.get("execution_procedure")
+        node.payload["termination_condition"] = payload.get("termination_condition")
+
         return node
 
     def __repr__(self) -> str:

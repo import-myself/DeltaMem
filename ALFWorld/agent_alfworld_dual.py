@@ -157,10 +157,34 @@ class DualTreeReflectiveAgent:
         logger.info(f"🎯 Goal: {task_goal}")
 
         # =================================================================
-        # Phase 1: Dual Retrieval (双树检索)
+        # FAST PATH: O(1) Skill Cache 匹配
+        # =================================================================
+        fast_path_used = False
+        if not no_memory and external_memory_str is None:
+            skill_state = {"task": task_goal, "env": env_description}
+            matched_skill = self.dual_memory.skill_cache.check_match(skill_state)
+            if matched_skill:
+                fast_path_used = True
+                task_path = []
+                env_path = []
+                task_memory_used = True
+                env_memory_used = False
+                memory_used = True
+                memory_context_str = (
+                    "# Skill-Based Memory (Fast Path)\n\n"
+                    f"**Activation Condition**: {matched_skill.activation_condition}\n\n"
+                    f"**Execution Procedure**:\n{matched_skill.execution_procedure}\n\n"
+                    f"**Termination Condition**: {matched_skill.termination_condition}"
+                )
+                logger.info(f"⚡ FAST PATH: Skill patch hit (node {matched_skill.source_node_id[:8]})")
+
+        # =================================================================
+        # Phase 1: Dual Retrieval (慢路径 DFS 检索)
         # =================================================================
 
-        if no_memory:
+        if fast_path_used:
+            pass  # fast path already set above
+        elif no_memory:
             # Baseline / AWM 模式：跳过 PRTree 检索
             task_path = []
             env_path = []
@@ -318,6 +342,12 @@ class DualTreeReflectiveAgent:
                 task_retrieved_path=task_path,
                 env_retrieved_path=env_path
             )
+
+            # 更新成功计数并触发固化检查
+            if success:
+                task_anchor = new_nodes["task_node"]
+                task_anchor.meta["success_count"] = task_anchor.meta.get("success_count", 0) + 1
+                self.dual_memory.trigger_consolidation_check(task_anchor, self.llm_client)
 
             messages.append({
                 'success': success,
@@ -483,27 +513,36 @@ class DualTreeReflectiveAgent:
         except json.JSONDecodeError:
             pass
 
-        # Step 4: \u7528\u6b63\u5219\u63d0\u53d6\u4e24\u4e2a\u5b57\u6bb5\u503c\uff0c\u6784\u9020\u7ed3\u679c
+        # Step 4: \u5c1d\u8bd5\u63d0\u53d6\u65b0 Skill \u683c\u5f0f\u5b57\u6bb5
+        ac = _re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
+        ep = _re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
+        tc = _re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, _re.DOTALL)
+        if ac and ep:
+            return {
+                "activation_condition": ac.group(1).replace("\n", " ").strip(),
+                "execution_procedure": ep.group(1).replace("\n", " ").strip(),
+                "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
+            }
+
+        # Step 5: \u5c1d\u8bd5\u63d0\u53d6\u65e7\u683c\u5f0f\u5b57\u6bb5
         md = _re.search(
             r'"memory_description"\s*:\s*"(.*?)"(?=\s*,\s*"content_body"|\s*})',
             raw, _re.DOTALL
         )
-        cb = _re.search(
-            r'"content_body"\s*:\s*"(.*?)"(?=\s*})',
-            raw, _re.DOTALL
-        )
+        cb = _re.search(r'"content_body"\s*:\s*"(.*?)"(?=\s*})', raw, _re.DOTALL)
         if md and cb:
             return {
                 "memory_description": md.group(1).replace("\n", " ").strip(),
-                "content_body": cb.group(1).replace("\n", " ").strip()
+                "content_body": cb.group(1).replace("\n", " ").strip(),
             }
 
-        # Step 5: \u6700\u7ec8\u964d\u7ea7 \u2014 \u5c06\u6574\u6bb5\u6587\u672c\u4f5c\u4e3a content_body
+        # Step 6: \u6700\u7ec8\u964d\u7ea7
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")
         summary = raw[:120].replace('"', "'").replace("\n", " ").strip()
         return {
-            "memory_description": summary,
-            "content_body": raw.replace('"', "'").replace("\n", " ").strip()
+            "activation_condition": summary,
+            "execution_procedure": raw.replace('"', "'").replace("\n", " ").strip(),
+            "termination_condition": "",
         }
     def _parse_action(self, llm_output: str) -> str:
         """解析 LLM 输出中的动作"""

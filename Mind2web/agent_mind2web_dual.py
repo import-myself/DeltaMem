@@ -209,11 +209,35 @@ class DualTreeMind2WebAgent:
         logger.info(f"🌐 Website: {website} | Domain: {domain}/{subdomain} | EnvKey: {env_key}")
 
         # =================================================================
-        # Phase 1: Dual Retrieval (双树检索)
+        # FAST PATH: O(1) Skill Cache 匹配
+        # =================================================================
+        fast_path_used = False
+        if not no_memory and external_memory_str is None:
+            skill_state = {"task": task_desc, "env": env_key}
+            matched_skill = self.dual_memory.skill_cache.check_match(skill_state)
+            if matched_skill:
+                fast_path_used = True
+                task_path = []
+                env_path = []
+                task_memory_used = True
+                env_memory_used = False
+                memory_used = True
+                memory_context = (
+                    "# Skill-Based Memory (Fast Path)\n\n"
+                    f"**Activation Condition**: {matched_skill.activation_condition}\n\n"
+                    f"**Execution Procedure**:\n{matched_skill.execution_procedure}\n\n"
+                    f"**Termination Condition**: {matched_skill.termination_condition}"
+                )
+                logger.info(f"⚡ FAST PATH: Skill patch hit (node {matched_skill.source_node_id[:8]})")
+
+        # =================================================================
+        # Phase 1: Dual Retrieval (慢路径 DFS 检索)
         # 任务树 key: task_desc
         # 网站树 key: website (e.g. "united.com")
         # =================================================================
-        if no_memory:
+        if fast_path_used:
+            pass  # fast path already set above
+        elif no_memory:
             # Baseline / AWM 模式：跳过 PRTree 检索
             task_path = []
             env_path = []
@@ -453,6 +477,12 @@ class DualTreeMind2WebAgent:
             env_retrieved_path=env_path,
         )
 
+        # 更新成功计数并触发固化检查
+        if success:
+            task_anchor = new_nodes["task_node"]
+            task_anchor.meta["success_count"] = task_anchor.meta.get("success_count", 0) + 1
+            self.dual_memory.trigger_consolidation_check(task_anchor, self.llm_client)
+
         return {
             "success": bool(success),
             "element_acc": element_acc_list,
@@ -649,6 +679,18 @@ class DualTreeMind2WebAgent:
         except json.JSONDecodeError:
             pass
 
+        # 尝试新 Skill 格式
+        ac = re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        ep = re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        tc = re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        if ac and ep:
+            return {
+                "activation_condition": ac.group(1).replace("\n", " ").strip(),
+                "execution_procedure": ep.group(1).replace("\n", " ").strip(),
+                "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
+            }
+
+        # 旧格式降级
         md = re.search(r'"memory_description"\s*:\s*"(.*?)"(?=\s*,\s*"content_body"|\s*})', raw, re.DOTALL)
         cb = re.search(r'"content_body"\s*:\s*"(.*?)"(?=\s*})', raw, re.DOTALL)
         if md and cb:
@@ -660,8 +702,9 @@ class DualTreeMind2WebAgent:
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")
         summary = raw[:120].replace('"', "'").replace("\n", " ").strip()
         return {
-            "memory_description": summary,
-            "content_body": raw.replace('"', "'").replace("\n", " ").strip(),
+            "activation_condition": summary,
+            "execution_procedure": raw.replace('"', "'").replace("\n", " ").strip(),
+            "termination_condition": "",
         }
 
     # --- 持久化 ---

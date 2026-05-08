@@ -28,6 +28,7 @@ from config import (
     ENV_TREE_BASE_THRESHOLD, ENV_TREE_DEPTH_STEP, ENV_TREE_MAX_THRESHOLD
 )
 from .memory_node import MemoryNode, NodeType, ResultStatus
+from .skill_patch import SkillCache, SkillCompiler, CONSOLIDATION_THRESHOLD
 from common.retriever import VectorRetriever
 
 logging.basicConfig(level=logging.INFO)
@@ -264,6 +265,10 @@ class DualTreeMemory:
             "env_tree_nodes": 1,
         }
 
+        # Skill 补丁缓存（快思考路径）
+        self.skill_cache = SkillCache()
+        self._skill_compiler = SkillCompiler()
+
         # 尝试加载
         self._load_trees_if_exist()
 
@@ -422,3 +427,53 @@ class DualTreeMemory:
         if Path(env_fp).exists():
             self.env_tree.load_tree(env_fp)
         self._sync_stats()
+
+    # =====================================================================
+    # 记忆固化：热点延迟编译触发器
+    # =====================================================================
+
+    def trigger_consolidation_check(self, node: MemoryNode, llm_client=None) -> None:
+        """
+        在每次任务执行成功并更新节点 success_count 后调用。
+        当 success_count >= CONSOLIDATION_THRESHOLD 且未固化时，
+        异步编译该节点的完整路径链为 ProceduralSkillPatch。
+        """
+        if node.meta.get("is_consolidated", False):
+            return
+        if node.meta.get("success_count", 0) < CONSOLIDATION_THRESHOLD:
+            return
+
+        logger.info(
+            f"[Consolidation] Node {node.node_id[:8]} reached success_count="
+            f"{node.meta['success_count']} — compiling Skill Patch..."
+        )
+
+        # 提取从 Root 到当前节点的完整文本链条
+        path = node.get_path_to_root()
+        chain_texts = []
+        for path_node in path:
+            if "GLOBAL_ROOT_PLACEHOLDER" in path_node.payload.get("scenario_description", ""):
+                continue
+            activation = path_node.payload.get("activation_condition") or path_node.payload.get("memory_description", "")
+            execution = path_node.payload.get("execution_procedure") or path_node.payload.get("content_body", "")
+            termination = path_node.payload.get("termination_condition", "")
+            chain_texts.append(
+                f"[Node {path_node.node_id[:8]}] ({path_node.meta.get('node_type', 'RESIDUAL')})\n"
+                f"Activation: {activation}\n"
+                f"Execution: {execution}\n"
+                f"Termination: {termination}"
+            )
+
+        if not chain_texts:
+            return
+
+        patch = self._skill_compiler.compile(
+            node_chain_texts=chain_texts,
+            skill_cache=self.skill_cache,
+            source_node_id=node.node_id,
+            llm_client=llm_client,
+        )
+
+        if patch:
+            node.meta["is_consolidated"] = True
+            logger.info(f"[Consolidation] ✅ Patch compiled for node {node.node_id[:8]}")
