@@ -265,8 +265,20 @@ class DualTreeMemory:
             "env_tree_nodes": 1,
         }
 
-        # Skill 补丁缓存（快思考路径），传入 retriever 以使用 embedding 匹配
-        self.skill_cache = SkillCache(retriever=self.retriever)
+        # Skill 补丁缓存（快思考路径）
+        # 使用 TaskTree 最深层阈值：Patch 是从能通过该阈值的深层节点编译而来的，
+        # 召回时对齐同一门槛保证语义一致性
+        deepest_task_threshold = min(
+            TASK_TREE_BASE_THRESHOLD + MAX_DEPTH * TASK_TREE_DEPTH_STEP,
+            TASK_TREE_MAX_THRESHOLD,
+        )
+        self.skill_cache = SkillCache(
+            retriever=self.retriever,
+            match_threshold=deepest_task_threshold,
+        )
+        logger.info(f"[SkillCache] match_threshold = {deepest_task_threshold:.3f} "
+                    f"(TaskTree deepest: base={TASK_TREE_BASE_THRESHOLD} + "
+                    f"MAX_DEPTH={MAX_DEPTH} × step={TASK_TREE_DEPTH_STEP})")
         self._skill_compiler = SkillCompiler()
 
         # 尝试加载

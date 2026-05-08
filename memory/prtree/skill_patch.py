@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CONSOLIDATION_THRESHOLD = 3
-SKILL_CACHE_MATCH_THRESHOLD = 0.82  # 高于 TaskTree base_threshold(0.80)，保证精准触发
+# SkillCache 默认阈值（兜底值）；实际使用时由 DualTreeMemory 传入 TaskTree 最深层阈值覆盖
+SKILL_CACHE_DEFAULT_THRESHOLD = 0.90
 
 
 @dataclass
@@ -48,7 +49,7 @@ class SkillCache:
     def __init__(
         self,
         retriever: Optional["VectorRetriever"] = None,
-        match_threshold: float = SKILL_CACHE_MATCH_THRESHOLD,
+        match_threshold: float = SKILL_CACHE_DEFAULT_THRESHOLD,
     ):
         self.patches: List[ProceduralSkillPatch] = []
         self._embeddings: List[Optional[np.ndarray]] = []  # 与 patches 一一对应
