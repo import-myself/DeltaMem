@@ -35,6 +35,7 @@ from dual_prompt import (
     mind2web_instruction,
     TaskTree_Prompt_Map, EnvTree_Prompt_Map,
     PROMPT_WITH_ICL_TEMPLATE, PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY,
+    MEMORY_HEADERS,
     get_task_prompt_key, get_env_prompt_key,
 )
 from mind2web_utils import (
@@ -148,14 +149,17 @@ class DualTreeMind2WebAgent:
         subdomain: str,
         website: str,
         memory_context: Optional[str],
+        memory_type: str = "prtree",
     ) -> List[Dict[str, str]]:
         """构建 system message，融合双树记忆"""
         examples = self.get_example(domain, subdomain, website)
 
         if memory_context:
+            memory_header = MEMORY_HEADERS.get(memory_type, MEMORY_HEADERS["prtree"])
             content = PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY.format(
                 instruction=mind2web_instruction,
                 examples=examples,
+                memory_header=memory_header,
                 memory_context=memory_context,
                 task=f"Task: {task_desc}",
             )
@@ -174,10 +178,13 @@ class DualTreeMind2WebAgent:
     def run_episode(
         self,
         sample: Dict[str, Any],
-        model_name: str = "gpt-4o-mini",
+        model_name: str = "deepseek-v4-flash",
         no_memory: bool = False,
+        no_prtree_update: bool = False,
         external_memory_str: Optional[str] = None,
         memory_mode: str = "both",
+        memory_type: str = "prtree",
+        episode_idx: int = -1,
     ) -> Dict[str, Any]:
         """
         运行一个完整 Mind2Web Episode
@@ -209,35 +216,11 @@ class DualTreeMind2WebAgent:
         logger.info(f"🌐 Website: {website} | Domain: {domain}/{subdomain} | EnvKey: {env_key}")
 
         # =================================================================
-        # FAST PATH: O(1) Skill Cache 匹配
-        # =================================================================
-        fast_path_used = False
-        if not no_memory and external_memory_str is None:
-            skill_state = {"task": task_desc, "env": env_key}
-            matched_skill = self.dual_memory.skill_cache.check_match(skill_state)
-            if matched_skill:
-                fast_path_used = True
-                task_path = []
-                env_path = []
-                task_memory_used = True
-                env_memory_used = False
-                memory_used = True
-                memory_context = (
-                    "# Skill-Based Memory (Fast Path)\n\n"
-                    f"**Activation Condition**: {matched_skill.activation_condition}\n\n"
-                    f"**Execution Procedure**:\n{matched_skill.execution_procedure}\n\n"
-                    f"**Termination Condition**: {matched_skill.termination_condition}"
-                )
-                logger.info(f"⚡ FAST PATH: Skill patch hit (node {matched_skill.source_node_id[:8]})")
-
-        # =================================================================
-        # Phase 1: Dual Retrieval (慢路径 DFS 检索)
+        # Phase 1: Dual Retrieval (DFS 检索)
         # 任务树 key: task_desc
         # 网站树 key: website (e.g. "united.com")
         # =================================================================
-        if fast_path_used:
-            pass  # fast path already set above
-        elif no_memory:
+        if no_memory:
             # Baseline / AWM 模式：跳过 PRTree 检索
             task_path = []
             env_path = []
@@ -288,7 +271,9 @@ class DualTreeMind2WebAgent:
                 env_memory_used  = not self.reader._is_empty_path(env_path)
             else:
                 # "both"：双树融合（默认行为）
-                memory_context   = self.reader.get_dual_narrative_context(task_desc, env_key)
+                memory_context   = self.reader.get_dual_narrative_context(
+                    task_desc, env_key, task_path=task_path, env_path=env_path
+                )
                 task_memory_used = not self.reader._is_empty_path(task_path)
                 env_memory_used  = not self.reader._is_empty_path(env_path)
 
@@ -308,7 +293,7 @@ class DualTreeMind2WebAgent:
         # =================================================================
         # Phase 2: Execution (Mind2Web 步骤执行)
         # =================================================================
-        sys_messages = self._build_system_prompt(task_desc, domain, subdomain, website, memory_context)
+        sys_messages = self._build_system_prompt(task_desc, domain, subdomain, website, memory_context, memory_type)
 
         element_acc_list = []
         action_f1_list   = []
@@ -432,17 +417,19 @@ class DualTreeMind2WebAgent:
         # Phase 3: Dual Reflection (双树反思)
         # Phase 4: Dual Evolution (双树写入)
         # =================================================================
-        if no_memory:
-            # Baseline 模式：跳过反思和写入
-            logger.info("🚫 Memory disabled (baseline): skipping reflection & tree update.")
+        if no_memory or no_prtree_update:
+            if no_prtree_update:
+                logger.info("🔌 External memory mode: skipping PRTree reflection & update.")
+            else:
+                logger.info("🚫 Memory disabled (no-memory baseline): skipping reflection & tree update.")
             return {
                 "success": bool(success),
                 "element_acc": element_acc_list,
                 "action_f1": action_f1_list,
                 "step_success": step_success_list,
-                "memory_used": False,
-                "task_memory_used": False,
-                "env_memory_used": False,
+                "memory_used": memory_used,
+                "task_memory_used": task_memory_used,
+                "env_memory_used": env_memory_used,
                 "task_retrieval_length": 0,
                 "env_retrieval_length": 0,
                 "task_reflection": {},
@@ -467,21 +454,53 @@ class DualTreeMind2WebAgent:
         )
 
         status = ResultStatus.SUCCESS if success else ResultStatus.FAILURE
-        new_nodes = self.writer.write_dual_experience(
-            task_description=task_desc,
-            env_description=env_key,
-            task_reflection=task_reflection,
-            env_reflection=env_reflection,
-            status=status,
-            task_retrieved_path=task_path,
-            env_retrieved_path=env_path,
-        )
+        task_skip = task_reflection.get("skip", False)
+        env_skip = env_reflection.get("skip", False)
+
+        task_node = None
+        env_node = None
+
+        if not task_skip:
+            task_node = self.writer.write_task_experience(
+                scenario_description=task_desc,
+                skill=task_reflection,
+                result_status=status,
+                retrieved_path=task_path,
+                episode_idx=episode_idx,
+            )
+        else:
+            logger.info("⏭ Task: existing skill covers this episode, skipping node creation.")
+
+        if not env_skip:
+            env_node = self.writer.write_env_experience(
+                scenario_description=env_key,
+                skill=env_reflection,
+                result_status=ResultStatus.SUCCESS,  # env 知识始终以 SUCCESS 存储
+                retrieved_path=env_path,
+                episode_idx=episode_idx,
+            )
+        else:
+            logger.info("⏭ Env: no new env knowledge, skipping node creation.")
 
         # 更新成功计数并触发固化检查
         if success:
-            task_anchor = new_nodes["task_node"]
-            task_anchor.meta["success_count"] = task_anchor.meta.get("success_count", 0) + 1
-            self.dual_memory.trigger_consolidation_check(task_anchor, self.llm_client)
+            deepest_retrieved = next(
+                (n for n in reversed(task_path)
+                 if "GLOBAL_ROOT_PLACEHOLDER" not in n.payload.get("scenario_description", "")),
+                None
+            )
+            if deepest_retrieved is not None:
+                deepest_retrieved.meta["success_count"] = deepest_retrieved.meta.get("success_count", 0) + 1
+                self.dual_memory.trigger_consolidation_check(deepest_retrieved, self.llm_client, tree_type="task")
+
+            deepest_env_retrieved = next(
+                (n for n in reversed(env_path)
+                 if "GLOBAL_ROOT_PLACEHOLDER" not in n.payload.get("scenario_description", "")),
+                None
+            )
+            if deepest_env_retrieved is not None:
+                deepest_env_retrieved.meta["success_count"] = deepest_env_retrieved.meta.get("success_count", 0) + 1
+                self.dual_memory.trigger_consolidation_check(deepest_env_retrieved, self.llm_client, tree_type="env")
 
         return {
             "success": bool(success),
@@ -495,8 +514,10 @@ class DualTreeMind2WebAgent:
             "env_retrieval_length": len(env_path) - 1 if env_memory_used else 0,
             "task_reflection": task_reflection,
             "env_reflection": env_reflection,
-            "task_node_id": new_nodes["task_node"].node_id,
-            "env_node_id": new_nodes["env_node"].node_id,
+            "task_skip": task_skip,
+            "env_skip": env_skip,
+            "task_node_id": task_node.node_id if task_node else None,
+            "env_node_id": env_node.node_id if env_node else None,
             "conversation": conversation,
             "trajectory": trajectory,
         }
@@ -568,7 +589,7 @@ class DualTreeMind2WebAgent:
                 trajectory=traj_str,
                 failed_steps_analysis=failed_steps_analysis,
             )
-        task_resp = self.llm_client.chat([{"role": "user", "content": task_prompt}], temperature=0.0)
+        task_resp = self.llm_client.chat([{"role": "user", "content": task_prompt}], temperature=0.0, max_tokens=8192)
         if _ELEMENT_ID_RE.search(task_resp):
             logger.warning("Task reflection contains element IDs — retrying with correction prompt.")
             task_resp = self.llm_client.chat(
@@ -604,7 +625,7 @@ class DualTreeMind2WebAgent:
                 trajectory=traj_str,
                 failed_steps_analysis=failed_steps_analysis,
             )
-        env_resp = self.llm_client.chat([{"role": "user", "content": env_prompt}], temperature=0.0)
+        env_resp = self.llm_client.chat([{"role": "user", "content": env_prompt}], temperature=0.0, max_tokens=8192)
         if _ELEMENT_ID_RE.search(env_resp):
             logger.warning("Env reflection contains element IDs — retrying with correction prompt.")
             env_resp = self.llm_client.chat(
@@ -660,6 +681,34 @@ class DualTreeMind2WebAgent:
         header = f"{len(failed_lines)} step(s) failed element selection:\n"
         return header + "\n".join(failed_lines)
 
+    @staticmethod
+    def _escape_json_strings(text: str) -> str:
+        """将 JSON 字符串值中的字面换行/制表符转义，同时跳过已转义字符。"""
+        result = []
+        in_string = False
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == '\\' and in_string:
+                # 已转义序列，原样保留两个字符
+                result.append(ch)
+                i += 1
+                if i < len(text):
+                    result.append(text[i])
+            elif ch == '"':
+                result.append(ch)
+                in_string = not in_string
+            elif in_string and ch == '\n':
+                result.append('\\n')
+            elif in_string and ch == '\r':
+                result.append('\\r')
+            elif in_string and ch == '\t':
+                result.append('\\t')
+            else:
+                result.append(ch)
+            i += 1
+        return ''.join(result)
+
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """解析 JSON，降级时始终返回 Skill 格式"""
         raw = response.strip()
@@ -668,26 +717,35 @@ class DualTreeMind2WebAgent:
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
 
+        # 尝试1：直接解析
         try:
             return json.loads(raw, strict=False)
         except json.JSONDecodeError:
             pass
 
-        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        # 尝试2：转义字符串内的字面换行符后再解析
         try:
-            return json.loads(cleaned, strict=False)
+            return json.loads(self._escape_json_strings(raw), strict=False)
         except json.JSONDecodeError:
             pass
 
-        # 正则提取 Skill 字段
-        ac = re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
-        ep = re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
-        tc = re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        # 尝试3：去除非打印控制字符后解析
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        try:
+            return json.loads(self._escape_json_strings(cleaned), strict=False)
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试4：正则提取三字段（容忍字段值中的转义引号）
+        _field = r'"((?:[^"\\]|\\.)*)"'
+        ac = re.search(r'"activation_condition"\s*:\s*' + _field, raw, re.DOTALL)
+        ep = re.search(r'"execution_procedure"\s*:\s*' + _field, raw, re.DOTALL)
+        tc = re.search(r'"termination_condition"\s*:\s*' + _field, raw, re.DOTALL)
         if ac and ep:
             return {
-                "activation_condition": ac.group(1).replace("\n", " ").strip(),
-                "execution_procedure": ep.group(1).replace("\n", " ").strip(),
-                "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
+                "activation_condition": ac.group(1).replace("\\n", " ").replace("\n", " ").strip(),
+                "execution_procedure":  ep.group(1).replace("\\n", "\n").strip(),
+                "termination_condition": tc.group(1).replace("\\n", " ").strip() if tc else "",
             }
 
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")

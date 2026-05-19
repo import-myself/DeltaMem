@@ -12,7 +12,7 @@ ALFWorld PRTree 阈值参数消融实验
 注意：本脚本放于 PRTree/ablation/，通过 sys.path 引入 ALFWorld 和公共模块。
 
 运行示例：
-  cd /hdd/REDACTED_USER/PRTree/ablation
+  cd /hdd/REDACTED_USER/DeltaMem/ablation
   python run_threshold_ablation.py \\
       --mode task \\
       --model gpt-4o-mini \\
@@ -34,8 +34,8 @@ from collections import deque
 from typing import Dict, List, Any, Optional
 
 # ---- 路径设置 ----
-_THIS_DIR    = Path(__file__).parent.resolve()         # .../PRTree/ablation/
-_PRTREE_ROOT = _THIS_DIR.parent                         # .../PRTree/
+_THIS_DIR    = Path(__file__).parent.resolve()         # .../DeltaMem/ablation/
+_PRTREE_ROOT = _THIS_DIR.parent                         # .../DeltaMem/
 _ALFWORLD    = _PRTREE_ROOT / "ALFWorld"
 
 sys.path.insert(0, str(_PRTREE_ROOT))   # common, memory

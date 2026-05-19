@@ -8,11 +8,11 @@ from pathlib import Path
 
 # ==================== 路径配置 ====================
 # ALFWorld 数据路径
-ALFWORLD_DATA_PATH = '/data/REDACTED_USER/PRTree/ALFWorld/data/alfworld'
+ALFWORLD_DATA_PATH = '/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
 
 # 本地 Embedding 模型路径 (使用 sentence-transformers)
 # 推荐模型: all-MiniLM-L6-v2, all-mpnet-base-v2
-EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/PRTree/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
 
 # 记忆存储路径
 STORAGE_PATH = "./memory_storage"
@@ -30,14 +30,15 @@ SIMILARITY_THRESHOLD_RESIDUAL = 0.85  # 残差检索阈值
 # ==================== 双树差异化阈值配置 ====================
 # 任务树: 任务目标描述较短且语义集中，不同任务之间的 embedding 差异较大，
 #          因此用较宽松的阈值以增加召回率
-TASK_TREE_BASE_THRESHOLD = 0.80   # 任务树基础阈值 (Root children 层)
-TASK_TREE_DEPTH_STEP = 0.03       # 每深一层增加的严格度
-TASK_TREE_MAX_THRESHOLD = 0.95    # 任务树阈值上限
+TASK_TREE_BASE_THRESHOLD = 0.75   # 任务树基础阈值 (Root children 层)
+TASK_TREE_DEPTH_STEP = 0.01       # 每深一层增加的严格度
+TASK_TREE_MAX_THRESHOLD = 0.99    # 任务树阈值上限
+TASK_TREE_EMBED_WITH_ACTIVATION = False  # 用 task_goal 做节点 embedding（与检索 query 保持一致）
 
 # 环境树: 环境描述较长且包含大量物品列表，相似环境之间 embedding 天然就很接近，
 #          因此需要较高的阈值以保证精确匹配
-ENV_TREE_BASE_THRESHOLD = 0.88    # 环境树基础阈值 (Root children 层)
-ENV_TREE_DEPTH_STEP = 0.02        # 每深一层增加的严格度
+ENV_TREE_BASE_THRESHOLD = 0.85    # 环境树基础阈值 (Root children 层)
+ENV_TREE_DEPTH_STEP = 0.03        # 每深一层增加的严格度
 ENV_TREE_MAX_THRESHOLD = 0.99     # 环境树阈值上限
 
 # ==================== 检索参数 ====================
@@ -56,12 +57,15 @@ JSON_ENSURE_ASCII = False
 TREE_STRUCTURE_FILE = "prtree_structure.json"
 TREE_METADATA_FILE = "prtree_metadata.json"
 
+# ==================== 记忆固化参数 ====================
+CONSOLIDATION_THRESHOLD = 5   # success_count 达到此值时触发链条固化
+
+# FAILURE 节点检索惩罚：在 cosine score 上扣减，使成功节点优先被选中
+FAILURE_NODE_PENALTY = 0.05
+
 # ==================== 日志参数 ====================
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# ==================== 自动创建存储目录 ====================
-Path(STORAGE_PATH).mkdir(parents=True, exist_ok=True)
 
 # ==================== 节点状态枚举 ====================
 class NodeStatus:

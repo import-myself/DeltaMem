@@ -27,6 +27,7 @@ from dual_prompt import (
     scienceworld_instruction,
     TaskTree_Prompt_Map, EnvTree_Prompt_Map,
     PROMPT_WITH_ICL_TEMPLATE, PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY,
+    MEMORY_HEADERS,
     get_task_prompt_key, get_env_prompt_key
 )
 
@@ -137,8 +138,11 @@ class DualTreeSciWorldAgent:
         task_name: str,
         variation_idx: int,
         no_memory: bool = False,
+        no_prtree_update: bool = False,
         external_memory_str: Optional[str] = None,
         memory_mode: str = "both",
+        memory_type: str = "prtree",
+        episode_idx: int = -1,
     ) -> Dict[str, Any]:
         """
         运行一个完整 Episode
@@ -171,33 +175,9 @@ class DualTreeSciWorldAgent:
         logger.info(f"🌍 Init Obs: {env_description[:120]}...")
 
         # ================================================================
-        # FAST PATH: O(1) Skill Cache 匹配
+        # Phase 1: Dual Retrieval (DFS 检索)
         # ================================================================
-        fast_path_used = False
-        if not no_memory and external_memory_str is None:
-            skill_state = {"task": task_description, "env": env_description}
-            matched_skill = self.dual_memory.skill_cache.check_match(skill_state)
-            if matched_skill:
-                fast_path_used = True
-                task_path = []
-                env_path = []
-                task_memory_used = True
-                env_memory_used = False
-                memory_used = True
-                memory_context_str = (
-                    "# Skill-Based Memory (Fast Path)\n\n"
-                    f"**Activation Condition**: {matched_skill.activation_condition}\n\n"
-                    f"**Execution Procedure**:\n{matched_skill.execution_procedure}\n\n"
-                    f"**Termination Condition**: {matched_skill.termination_condition}"
-                )
-                logger.info(f"⚡ FAST PATH: Skill patch hit (node {matched_skill.source_node_id[:8]})")
-
-        # ================================================================
-        # Phase 1: Dual Retrieval (慢路径 DFS 检索)
-        # ================================================================
-        if fast_path_used:
-            pass  # fast path already set above
-        elif no_memory:
+        if no_memory:
             # Baseline / AWM 模式：跳过 PRTree 检索
             task_path = []
             env_path = []
@@ -249,7 +229,7 @@ class DualTreeSciWorldAgent:
             else:
                 # "both"：双树融合（默认行为）
                 memory_context_str = self.reader.get_dual_narrative_context(
-                    task_description, env_description
+                    task_description, env_description, task_path=task_path, env_path=env_path
                 )
                 task_memory_used = not self.reader._is_empty_path(task_path)
                 env_memory_used  = not self.reader._is_empty_path(env_path)
@@ -268,7 +248,7 @@ class DualTreeSciWorldAgent:
         # ================================================================
         # Phase 2: Execution
         # ================================================================
-        messages = self._build_prompt(task_description, env_description, memory_context_str)
+        messages = self._build_prompt(task_description, env_description, memory_context_str, memory_type)
 
         observation = task_description  # 第一轮 observation 即任务描述
         success = False
@@ -344,9 +324,11 @@ class DualTreeSciWorldAgent:
         task_id_num = self.taskname2id.get(task_name, -1)
         task_id = f"{task_id_num}_{variation_idx}"
 
-        if no_memory:
-            # Baseline 模式：跳过反思和写入
-            logger.info("🚫 Memory disabled (baseline): skipping reflection & tree update.")
+        if no_memory or no_prtree_update:
+            if no_prtree_update:
+                logger.info("🔌 External memory mode: skipping PRTree reflection & update.")
+            else:
+                logger.info("🚫 Memory disabled (no-memory baseline): skipping reflection & tree update.")
             messages.append({
                 "success": success,
                 "reward": final_reward,
@@ -354,9 +336,9 @@ class DualTreeSciWorldAgent:
                 "task_name": task_name,
                 "task_id": task_id,
                 "variation_idx": variation_idx,
-                "memory_used": False,
-                "task_memory_used": False,
-                "env_memory_used": False,
+                "memory_used": memory_used,
+                "task_memory_used": task_memory_used,
+                "env_memory_used": env_memory_used,
                 "task_retrieval_length": 0,
                 "env_retrieval_length": 0,
                 "task_reflection": {},
@@ -377,22 +359,54 @@ class DualTreeSciWorldAgent:
                 env_path=env_path,
             )
 
-            status = ResultStatus.SUCCESS if success else ResultStatus.FAILURE
-            new_nodes = self.writer.write_dual_experience(
-                task_description=task_description,
-                env_description=env_description,
-                task_reflection=task_reflection,
-                env_reflection=env_reflection,
-                status=status,
-                task_retrieved_path=task_path,
-                env_retrieved_path=env_path,
-            )
+            task_status = ResultStatus.SUCCESS if success else ResultStatus.FAILURE
+            task_skip = task_reflection.get("skip", False)
+            env_skip = env_reflection.get("skip", False)
+
+            task_node = None
+            env_node = None
+
+            if not task_skip:
+                task_node = self.writer.write_task_experience(
+                    scenario_description=task_description,
+                    skill=task_reflection,
+                    result_status=task_status,
+                    retrieved_path=task_path,
+                    episode_idx=episode_idx,
+                )
+            else:
+                logger.info("⏭ Task: existing skill covers this episode, skipping node creation.")
+
+            if not env_skip:
+                env_node = self.writer.write_env_experience(
+                    scenario_description=env_description,
+                    skill=env_reflection,
+                    result_status=ResultStatus.SUCCESS,  # env 知识始终以 SUCCESS 存储
+                    retrieved_path=env_path,
+                    episode_idx=episode_idx,
+                )
+            else:
+                logger.info("⏭ Env: no new env knowledge, skipping node creation.")
 
             # 更新成功计数并触发固化检查
             if success:
-                task_anchor = new_nodes["task_node"]
-                task_anchor.meta["success_count"] = task_anchor.meta.get("success_count", 0) + 1
-                self.dual_memory.trigger_consolidation_check(task_anchor, self.llm_client)
+                deepest_retrieved = next(
+                    (n for n in reversed(task_path)
+                     if "GLOBAL_ROOT_PLACEHOLDER" not in n.payload.get("scenario_description", "")),
+                    None
+                )
+                if deepest_retrieved is not None:
+                    deepest_retrieved.meta["success_count"] = deepest_retrieved.meta.get("success_count", 0) + 1
+                    self.dual_memory.trigger_consolidation_check(deepest_retrieved, self.llm_client, tree_type="task")
+
+                deepest_env_retrieved = next(
+                    (n for n in reversed(env_path)
+                     if "GLOBAL_ROOT_PLACEHOLDER" not in n.payload.get("scenario_description", "")),
+                    None
+                )
+                if deepest_env_retrieved is not None:
+                    deepest_env_retrieved.meta["success_count"] = deepest_env_retrieved.meta.get("success_count", 0) + 1
+                    self.dual_memory.trigger_consolidation_check(deepest_env_retrieved, self.llm_client, tree_type="env")
 
             messages.append({
                 "success": success,
@@ -409,8 +423,10 @@ class DualTreeSciWorldAgent:
                 "task_reflection": task_reflection,
                 "env_reflection": env_reflection,
                 "trajectory": trajectory,
-                "task_node_id": new_nodes["task_node"].node_id,
-                "env_node_id": new_nodes["env_node"].node_id,
+                "task_node_id": task_node.node_id if task_node else None,
+                "env_node_id": env_node.node_id if env_node else None,
+                "task_skip": task_skip,
+                "env_skip": env_skip,
             })
 
         return messages
@@ -420,14 +436,17 @@ class DualTreeSciWorldAgent:
         task_description: str,
         env_description: str,
         memory_context_str: Optional[str],
+        memory_type: str = "prtree",
     ) -> List[Dict[str, str]]:
         """构建初始 Prompt（支持双树记忆融合）"""
         icl_text = self.build_icl_examples_text()
 
         if memory_context_str:
+            memory_header = MEMORY_HEADERS.get(memory_type, MEMORY_HEADERS["prtree"])
             full_content = PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY.format(
                 instruction=scienceworld_instruction,
                 examples=icl_text,
+                memory_header=memory_header,
                 memory_context=memory_context_str,
                 task=task_description,
             )
@@ -482,7 +501,7 @@ class DualTreeSciWorldAgent:
             )
 
         task_response = self.llm_client.chat(
-            [{"role": "user", "content": task_prompt}], temperature=0.0
+            [{"role": "user", "content": task_prompt}], temperature=0.0, max_tokens=8192
         )
         task_reflection = self._parse_json_response(task_response)
 
@@ -514,11 +533,37 @@ class DualTreeSciWorldAgent:
             )
 
         env_response = self.llm_client.chat(
-            [{"role": "user", "content": env_prompt}], temperature=0.0
+            [{"role": "user", "content": env_prompt}], temperature=0.0, max_tokens=8192
         )
         env_reflection = self._parse_json_response(env_response)
 
         return task_reflection, env_reflection
+
+    @staticmethod
+    def _escape_json_strings(text: str) -> str:
+        result = []
+        in_string = False
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == '\\' and in_string:
+                result.append(ch)
+                i += 1
+                if i < len(text):
+                    result.append(text[i])
+            elif ch == '"':
+                result.append(ch)
+                in_string = not in_string
+            elif in_string and ch == '\n':
+                result.append('\\n')
+            elif in_string and ch == '\r':
+                result.append('\\r')
+            elif in_string and ch == '\t':
+                result.append('\\t')
+            else:
+                result.append(ch)
+            i += 1
+        return ''.join(result)
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """解析 JSON，降级时始终返回 Skill 格式"""
@@ -533,21 +578,26 @@ class DualTreeSciWorldAgent:
         except json.JSONDecodeError:
             pass
 
-        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
         try:
-            return json.loads(cleaned, strict=False)
+            return json.loads(self._escape_json_strings(raw), strict=False)
         except json.JSONDecodeError:
             pass
 
-        # 正则提取 Skill 字段
-        ac = re.search(r'"activation_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
-        ep = re.search(r'"execution_procedure"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
-        tc = re.search(r'"termination_condition"\s*:\s*"(.*?)"(?=\s*[,}])', raw, re.DOTALL)
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        try:
+            return json.loads(self._escape_json_strings(cleaned), strict=False)
+        except json.JSONDecodeError:
+            pass
+
+        _field = r'"((?:[^"\\]|\\.)*)"'
+        ac = re.search(r'"activation_condition"\s*:\s*' + _field, raw, re.DOTALL)
+        ep = re.search(r'"execution_procedure"\s*:\s*' + _field, raw, re.DOTALL)
+        tc = re.search(r'"termination_condition"\s*:\s*' + _field, raw, re.DOTALL)
         if ac and ep:
             return {
-                "activation_condition": ac.group(1).replace("\n", " ").strip(),
-                "execution_procedure": ep.group(1).replace("\n", " ").strip(),
-                "termination_condition": tc.group(1).replace("\n", " ").strip() if tc else "",
+                "activation_condition": ac.group(1).replace("\\n", " ").replace("\n", " ").strip(),
+                "execution_procedure":  ep.group(1).replace("\\n", "\n").strip(),
+                "termination_condition": tc.group(1).replace("\\n", " ").strip() if tc else "",
             }
 
         logger.warning(f"JSON parse fallback. Raw[:200]={raw[:200]}")
@@ -561,12 +611,17 @@ class DualTreeSciWorldAgent:
     def _parse_action(self, llm_output: str) -> str:
         """解析 LLM 输出中的动作"""
         llm_output = llm_output.strip()
-        pattern = re.compile(r"Action:\s?(.*)", re.DOTALL)
+        pattern = re.compile(r"Action:\s?(.*)")
         matches = re.findall(pattern, llm_output)
         if not matches:
-            raise ValueError(f"No 'Action:' found in output: {llm_output[:100]}")
-        action = matches[0].strip().split("\n")[0].strip()
-        return action
+            return "look around"
+
+        action = matches[0].strip()
+        # LLM 有时先输出 "task complete" 再给真实动作，取后一个
+        if 'task complete' in action.lower() and len(matches) > 1:
+            action = matches[1].strip()
+
+        return action if action else "look around"
 
     # --- 持久化与统计 ---
     def load_memory(self, filepath: str):

@@ -1,10 +1,11 @@
 """
-Dual PR-Tree Prompt Templates (v8.0 - Skill Format)
+Dual PR-Tree Prompt Templates for ALFWorld (v11.0 - Lean)
 
-v8.0 核心改进:
-- 反思 Prompt 统一重构为面向 Skill 的格式，输出 activation_condition / execution_procedure / termination_condition
-- Root 节点 → Base Skill（基础技能提取）
-- Residual 节点 → Skill Delta（技能修正残差）
+设计原则:
+- Root: 冷启动，从轨迹提取完整自包含 skill/knowledge
+- Node: 增量，只提取与已有记忆不同的最小 delta
+- Failure: 记录陷阱，不是可执行步骤
+- 不用 Rules 列表，直接在字段描述里说清要求
 """
 
 # =================================================================
@@ -53,7 +54,7 @@ Here is an example for a complete task trajectory.
 {examples}
 ---
 
-The following relevant experiences may help you complete the task:
+{memory_header}
 
 {memory_context}
 
@@ -61,30 +62,48 @@ Now, it's your turn and here is the task.
 {task}
 """
 
+MEMORY_HEADERS: dict = {
+    "prtree": (
+        "Retrieved from your hierarchical memory system:\n"
+        "• Task Skill Memory — HOW to solve this task type (Base Skill + Skill Deltas as patches)\n"
+        "• Environment Knowledge Memory — WHERE objects are and HOW to operate receptacles/appliances\n"
+        "Note: 'Trigger'/'Applicable scenario' labels describe PAST episodes — your actual task is at the end."
+    ),
+    "synapse": (
+        "The following past task trajectories are retrieved from memory as few-shot examples. "
+        "Use them as reference if the task pattern is similar to the current one:"
+    ),
+    "awm": (
+        "The following workflow procedure was distilled from past similar household tasks. "
+        "Follow it as a step-by-step guide if the task type matches:"
+    ),
+    "reasoningbank": (
+        "The following memory items are distilled lessons from past household task interactions. "
+        "[✅ SUCCESS] entries describe strategies that worked; "
+        "[⚠️ FAILURE] entries highlight mistakes to avoid. "
+        "Apply the relevant insights to guide your actions:"
+    ),
+}
+
 
 # =================================================================
-# 任务树反思 Prompt (Task Tree) — Skill 格式
+# 任务树反思 Prompt (Task Tree)
 # =================================================================
 
 TaskTree_Prompt_Map = {}
 
-TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Based on the following successful task trajectory (starting from scratch), extract a **Base Skill** that encapsulates the complete executable strategy.
+TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Extract a reusable Base Skill from this successful trajectory.
 
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Result: SUCCESS ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-Your output will be placed in a global skill cache and triggered DIRECTLY when similar tasks are encountered — with NO access to any trajectory, environment description, or memory chain.
-
-Output a **self-contained Base Skill** as JSON with these three fields:
-- `activation_condition`: When to trigger this skill — describe the task TYPE precisely (e.g., "for heat-then-place tasks where the goal is to heat an object and place it on a receptacle"). Include all prerequisites.
-- `execution_procedure`: The complete, self-contained step-by-step action sequence. Must specify action syntax explicitly (e.g., "use 'heat X with microwave' while holding X"). Must NOT reference 'the above trajectory' or any external context.
-- `termination_condition`: When to consider this skill complete and hand back control (e.g., "task marked as complete by environment" or "object placed on target receptacle").
+Output a self-contained Base Skill — future agents have NO access to this trajectory:
+- `activation_condition`: In plain natural language, describe when this skill applies and what distinguishes it from other tasks.
+- `execution_procedure`: Concrete step sequence derived from this trajectory. Write out each individual action — do not collapse multi-step operations into a single abstract phrase.
+- `termination_condition`: When the skill is complete.
 
 Output ONLY the JSON:
 {{
@@ -94,55 +113,53 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['root_failure'] = """You are a Skill Extractor. Based on the following FAILED task trajectory, extract a **corrective Base Skill** that prevents future agents from making the same mistake.
+TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This is a FAILURE RECORD — NOT a skill to execute. Future agents will see a ⛔ warning with this.
 
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
+Task: {task_description}
+Result: FAILURE ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-Your output will be placed in a global skill cache and triggered DIRECTLY when similar tasks are encountered — with NO access to any trajectory, environment description, or memory chain.
-
-Output a **self-contained corrective Base Skill** as JSON:
-- `activation_condition`: Task type this skill applies to, including what went wrong (e.g., "for heat-then-place tasks where agent incorrectly puts object inside appliance first").
-- `execution_procedure`: The corrected self-contained action sequence with explicit error-avoidance rules.
-- `termination_condition`: When to consider the skill complete.
+- `activation_condition`: In plain natural language, describe what task situation this applies to and what wrong assumption caused the failure.
+- `execution_procedure`:
+  [FAILED]: Actions tried and environment responses showing they failed.
+  [UNEXPLORED]: Plausible approaches never attempted.
+- `termination_condition`: Leave empty string.
 
 Output ONLY the JSON:
 {{
     "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
-TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Compare the existing skill memories with this new successful trajectory and extract the **Skill Delta** — the incremental modification needed to adapt the existing skill to this new scenario.
+TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract ONLY the minimal new patch not covered by existing skills.
 
-=== EXISTING SKILL MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING SKILL MEMORIES ===
 {retrieved_task_memory}
 === END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Result: SUCCESS ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing memories. Identify exactly what they cover.
-2. FIND what is genuinely NEW: a different precondition, an additional step, an edge case, or a more efficient variant.
-3. Output ONLY the new incremental Skill Delta as a self-contained JSON:
-   - `activation_condition`: The SPECIFIC NEW trigger condition — the precise new premise that activates this delta (e.g., "when the target receptacle requires opening before placing"). Must DIFFER from existing conditions.
-   - `execution_procedure`: The NEW/modified steps only — what to ADD, REPLACE, or DELETE relative to the base skill. Must be self-contained (readable without the existing memories).
-   - `termination_condition`: When this delta's modification is complete and the base skill resumes.
+Output {{"skip": true}} ONLY if you can satisfy ALL of the following, with direct evidence:
+1. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
+2. No action in this trajectory required a recovery step, a different object category, or a procedural order not covered by that quoted text.
+If you cannot quote matching text for even ONE action in this trajectory, you MUST write a delta.
 
-Output ONLY the JSON:
+Otherwise, output the smallest delta (1-3 new observations max):
+- `activation_condition`: In plain natural language, describe the specific new condition or variant that makes this delta necessary — must differ from existing triggers.
+- `execution_procedure`: New steps only, concrete and self-contained.
+- `termination_condition`: When this delta is done.
+
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
     "execution_procedure": "...",
@@ -150,148 +167,89 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor. Identify the **gap in existing skills** that caused this failure and extract a corrective Skill Delta.
+TaskTree_Prompt_Map['node_failure'] = """You are a Failure Recorder. Record the gap in existing skills that caused this failure.
 
-=== EXISTING SKILL MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING SKILL MEMORIES ===
 {retrieved_task_memory}
 === END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
+Task: {task_description}
+Result: FAILURE ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing skills. What do they recommend?
-2. IDENTIFY the specific gap: what rule, edge case, or precondition is NOT covered?
-3. Output ONLY the corrective Skill Delta as self-contained JSON:
-   - `activation_condition`: The precise new trigger — the situation the existing skills failed to handle.
-   - `execution_procedure`: The corrective action sequence that fills the gap. Self-contained, no references to existing memories.
-   - `termination_condition`: When this corrective delta is complete.
+Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and the exact environment responses from that record that match this trajectory. If the failed action sequence or environment response differs in any way, you MUST write a new record.
 
-Output ONLY the JSON:
+Otherwise, output the gap as a trap record:
+- `activation_condition`: In plain natural language, describe the specific situation that existing skills failed to handle.
+- `execution_procedure`:
+  [FAILED]: What was tried and why it failed.
+  [UNEXPLORED]: Approaches never attempted.
+- `termination_condition`: Leave empty string.
+
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
 
 # =================================================================
-# 环境树反思 Prompt (Env Tree) — Skill 格式
+# 环境树反思 Prompt (Env Tree)
 # =================================================================
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You are a Skill Extractor for Environment Knowledge. Based on this successful trajectory, extract a **Base Environment Skill** covering layout and operation rules for this environment type.
+EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative facts about this household environment from the trajectory — regardless of whether the task succeeded or failed, the environmental observations are valid knowledge.
 
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Outcome: {result} ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-Your output will be triggered DIRECTLY in similar environments with NO access to this trajectory.
-
-Output a **self-contained Base Environment Skill** as JSON:
-- `activation_condition`: The environment type + key features that make this skill applicable (e.g., "in kitchen environments with a microwave, countertops, and multiple cabinets").
-- `execution_procedure`: Complete self-contained environment knowledge: (A) object-location patterns, (B) appliance/receptacle operation rules, (C) efficient search order and pitfalls.
-- `termination_condition`: When environment-adaptive navigation is complete (e.g., "target object located and retrieved; ready for task-specific operations").
+Output self-contained Base Environment Knowledge — FACTS about the world, not a procedure:
+- `activation_condition`: "Applicable in [environment_type] environments where ..." — key structural features.
+- `execution_procedure`: CATEGORY-LEVEL patterns only — (A) what TYPES of objects tend to be in what TYPES of locations (e.g., "condiment-type objects tend to be on countertops or in kitchen drawers"), (B) how receptacle/appliance types behave, (C) pitfalls observed. Write as observations ("X-type objects tend to be on Y"), not commands. ⚠️ Do NOT record specific instances (e.g., "cabinet 3 had saltshaker 1") — ALFWorld randomizes object placement each episode, making specific locations immediately stale. Focus on generalizable object-category → location-type tendencies.
+- `termination_condition`: When this knowledge has been fully applied.
 
 Output ONLY the JSON:
 {{
-    "activation_condition": "...",
+    "activation_condition": "Applicable in [environment_type] environments where ...",
     "execution_procedure": "...",
     "termination_condition": "..."
 }}
 """
 
-EnvTree_Prompt_Map['root_failure'] = """You are a Skill Extractor for Environment Knowledge. Based on this FAILED trajectory, extract a **corrective Base Environment Skill** that warns future agents about environmental traps.
+EnvTree_Prompt_Map['node'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge — regardless of whether the task succeeded or failed.
 
-**Full Scenario:**
-Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
-
-Trajectory:
-{trajectory}
-
-**Output Requirements:**
-Output a **self-contained corrective Base Environment Skill** as JSON:
-- `activation_condition`: The environment type + the specific trap condition that triggered this failure.
-- `execution_procedure`: Corrective environment knowledge: what went wrong, correct operation rules, pitfall avoidance strategies.
-- `termination_condition`: When environment-specific pitfalls have been addressed.
-
-Output ONLY the JSON:
-{{
-    "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
-}}
-"""
-
-EnvTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor for Environment Knowledge. Extract the **Environment Skill Delta** — new environment knowledge NOT covered by existing memories.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING ENVIRONMENT KNOWLEDGE ===
 {retrieved_env_memory}
 === END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Outcome: {result} ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing environment memories. What layout patterns and operation rules do they cover?
-2. FIND genuinely NEW knowledge: new object-location mapping, new appliance rule, new pitfall.
-3. Output ONLY the new Environment Skill Delta as self-contained JSON:
-   - `activation_condition`: The specific new environment condition that activates this delta.
-   - `execution_procedure`: The NEW environment knowledge only. Self-contained, no references to existing memories.
-   - `termination_condition`: When this environment adaptation is complete.
+Output {{"skip": true}} ONLY when EVERY specific object location AND EVERY appliance/receptacle interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. Each new trajectory visits different rooms and finds objects in specific spots — if even ONE location or rule is not explicitly in the existing knowledge, you MUST write an update.
 
-Output ONLY the JSON:
+Otherwise, output the smallest new update (1-3 new facts max):
+- `activation_condition`: "Applicable in [environment_type] environments where ..." — the new structural feature.
+- `execution_procedure`: CATEGORY-LEVEL patterns only — new object-type → location-type tendencies or new appliance behavior rules not in existing knowledge. Write as observations ("X-type objects tend to be on Y"), not commands. ⚠️ Do NOT record specific instances (e.g., "cabinet 3 had saltshaker 1") — ALFWorld randomizes object placement each episode, making specific locations immediately stale.
+- `termination_condition`: When this adaptation is complete.
+
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
-}}
-"""
-
-EnvTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor for Environment Knowledge. Identify the **environment knowledge gap** that caused this failure.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT) ===
-{retrieved_env_memory}
-=== END ===
-
-**Current Experience:**
-Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
-
-Trajectory:
-{trajectory}
-
-**Output Requirements:**
-1. READ existing environment memories.
-2. IDENTIFY the specific gap: wrong object-location assumption, missed appliance rule, or uncovered interaction trap.
-3. Output ONLY the corrective Environment Skill Delta as self-contained JSON:
-   - `activation_condition`: The specific new environment situation the existing memories failed to cover.
-   - `execution_procedure`: The corrective environment rule. Self-contained.
-   - `termination_condition`: When this environmental correction is applied.
-
-Output ONLY the JSON:
-{{
-    "activation_condition": "...",
+    "activation_condition": "Applicable in [environment_type] environments where ...",
     "execution_procedure": "...",
     "termination_condition": "..."
 }}
@@ -308,8 +266,5 @@ def get_task_prompt_key(is_root: bool, is_success: bool) -> str:
     else:
         return "node_success" if is_success else "node_failure"
 
-def get_env_prompt_key(is_root: bool, is_success: bool) -> str:
-    if is_root:
-        return "root_success" if is_success else "root_failure"
-    else:
-        return "node_success" if is_success else "node_failure"
+def get_env_prompt_key(is_root: bool, is_success: bool = True) -> str:
+    return "root" if is_root else "node"

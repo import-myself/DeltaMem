@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# ALFWorld 基线实验：synapse / awm / reasoningbank
+# 冷启动（主实验），边跑边在线更新各自记忆库
+# 各方法独立 API key，独立 memory-path，进程间零污染
+set -euo pipefail
+
+export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
+export DEEPSEEK_BASE_URL='https://api.deepseek.com'
+
+model_name="deepseek-v4-flash"
+split="eval_in_distribution"
+benchmark="alfworld"
+
+mkdir -p logs results trajectories storage
+
+# ---- 1. Synapse  (key 1) ----
+memory="synapse"
+DEEPSEEK_API_KEY='sk-5529a7a886ee4b9bb407b614c4ead012' \
+nohup python -u example_dual_usage.py \
+    --mode          eval \
+    --model         "${model_name}" \
+    --split         "${split}" \
+    --memory        "${memory}" \
+    --memory-path   "storage/${split}-${benchmark}-${model_name}-${memory}" \
+    --save-interval 10 \
+    --traj-dir      "trajectories/${split}-${benchmark}-${model_name}-${memory}" \
+    --results-csv   "results/${split}-${benchmark}-${model_name}.csv" \
+    > "logs/${split}-${benchmark}-${model_name}-${memory}.log" 2>&1 &
+echo "Started synapse PID=$!"
+
+# ---- 2. AWM  (key 2) ----
+memory="awm"
+DEEPSEEK_API_KEY='sk-b457f919725342e282ad5900ead23542' \
+nohup python -u example_dual_usage.py \
+    --mode          eval \
+    --model         "${model_name}" \
+    --split         "${split}" \
+    --memory        "${memory}" \
+    --memory-path   "storage/${split}-${benchmark}-${model_name}-${memory}" \
+    --save-interval 10 \
+    --traj-dir      "trajectories/${split}-${benchmark}-${model_name}-${memory}" \
+    --results-csv   "results/${split}-${benchmark}-${model_name}.csv" \
+    > "logs/${split}-${benchmark}-${model_name}-${memory}.log" 2>&1 &
+echo "Started awm PID=$!"
+
+# ---- 3. ReasoningBank  (key 3) ----
+memory="reasoningbank"
+DEEPSEEK_API_KEY='sk-fda59b026c224dcb933036d18cea9a6a' \
+nohup python -u example_dual_usage.py \
+    --mode          eval \
+    --model         "${model_name}" \
+    --split         "${split}" \
+    --memory        "${memory}" \
+    --memory-path   "storage/${split}-${benchmark}-${model_name}-${memory}" \
+    --save-interval 10 \
+    --traj-dir      "trajectories/${split}-${benchmark}-${model_name}-${memory}" \
+    --results-csv   "results/${split}-${benchmark}-${model_name}.csv" \
+    > "logs/${split}-${benchmark}-${model_name}-${memory}.log" 2>&1 &
+echo "Started reasoningbank PID=$!"

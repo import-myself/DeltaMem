@@ -6,7 +6,7 @@ Mind2Web 专用配置文件
 from pathlib import Path
 
 # ==================== 路径配置 ====================
-EMBEDDING_MODEL_PATH = "/data/REDACTED_USER/PRTree/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
 STORAGE_PATH = "./memory_storage"
 DATA_DIR = "./data"
 EXEMPLAR_PATH = "./data/example/exemplars.json"
@@ -24,6 +24,7 @@ TREE_METADATA_FILE = "prtree_metadata.json"
 TASK_TREE_BASE_THRESHOLD = 0.75
 TASK_TREE_DEPTH_STEP = 0.03
 TASK_TREE_MAX_THRESHOLD = 0.95
+TASK_TREE_EMBED_WITH_ACTIVATION = False  # 用 task_goal 做节点 embedding
 
 # 网站树 (对应 ALFWorld 的环境树):
 # env_key = domain::subdomain::website，相似度天然偏高，提高基础阈值防止跨网站误命中
@@ -44,6 +45,12 @@ SIMILARITY_THRESHOLD_RESIDUAL = 0.85
 TOP_K_CANDIDATES = 5
 MAX_SIBLING_CHECK = 10
 
+# ==================== 记忆固化参数 ====================
+CONSOLIDATION_THRESHOLD = 3
+
+# FAILURE 节点检索惩罚
+FAILURE_NODE_PENALTY = 0.05
+
 # ==================== 日志参数 ====================
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -52,5 +59,3 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 DEBUG_MODE = True
 VERBOSE_RETRIEVAL = True
 
-# ==================== 自动创建存储目录 ====================
-Path(STORAGE_PATH).mkdir(parents=True, exist_ok=True)

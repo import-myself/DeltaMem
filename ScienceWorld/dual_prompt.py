@@ -45,6 +45,7 @@ wait1: task no action for a step
 # =================================================================
 
 PROMPT_WITH_ICL_TEMPLATE = """{instruction}
+---
 Here is an example for a complete task trajectory.
 
 {examples}
@@ -55,18 +56,42 @@ Now, it's your turn and here is the task.
 """
 
 PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY = """{instruction}
+---
 Here is an example for a complete task trajectory.
 
 {examples}
 ---
 
-The following relevant experiences may help you complete the task:
+{memory_header}
 
 {memory_context}
 
 Now, it's your turn and here is the task.
 {task}
 """
+
+MEMORY_HEADERS: dict = {
+    "prtree": (
+        "Retrieved from your hierarchical memory system:\n"
+        "• Task Skill Memory — HOW to perform this science task type (Base Skill + Skill Deltas as patches)\n"
+        "• Environment Knowledge Memory — WHERE items are located and HOW devices/equipment operate\n"
+        "Note: 'Trigger'/'Applicable scenario' labels describe PAST episodes — your actual task is at the end."
+    ),
+    "synapse": (
+        "The following past experiment trajectories are retrieved from memory as few-shot examples. "
+        "Use them as reference if the experimental pattern is similar to the current one:"
+    ),
+    "awm": (
+        "The following workflow procedure was distilled from past similar science experiments. "
+        "Follow it as a step-by-step guide if the experiment type matches:"
+    ),
+    "reasoningbank": (
+        "The following memory items are distilled lessons from past science experiment interactions. "
+        "[✅ SUCCESS] entries describe experimental strategies that worked; "
+        "[⚠️ FAILURE] entries highlight mistakes to avoid. "
+        "Apply the relevant insights to guide your experiment:"
+    ),
+}
 
 
 # =================================================================
@@ -89,9 +114,9 @@ Trajectory:
 Your output will be placed in a global skill cache and triggered DIRECTLY with NO access to this trajectory.
 
 Output a **self-contained Base Skill** as JSON:
-- `activation_condition`: The science task TYPE precisely (e.g., "for boiling tasks where the goal is to boil water or a liquid"). Include all prerequisites (required rooms, equipment needed).
-- `execution_procedure`: Complete self-contained step-by-step procedure: (1) where to find items, (2) exact action sequence with action syntax (e.g., "use thermometer on OBJ"), (3) critical preconditions and pitfalls.
-- `termination_condition`: When this skill is complete (e.g., "target substance has reached required state / reward > 0 confirmed").
+- `activation_condition`: The science task TYPE precisely (e.g., for boiling tasks where the goal is to boil water or a liquid). Include all prerequisites (required rooms, equipment needed).
+- `execution_procedure`: Complete self-contained step-by-step procedure: (1) where to find items, (2) exact action sequence with action syntax (e.g., use thermometer on OBJ), (3) critical preconditions and pitfalls.
+- `termination_condition`: When this skill is complete (e.g., target substance has reached required state / reward > 0 confirmed).
 
 Output ONLY the JSON:
 {{
@@ -101,7 +126,7 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['root_failure'] = """You are a Skill Extractor. Based on this FAILED scientific experiment, extract a **corrective Base Skill** to prevent future agents from repeating the mistake.
+TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This output will be stored as a FAILURE RECORD — it is NOT a skill to execute. It will be shown to future agents with a ⛔ warning so they know what to avoid.
 
 **Full Scenario:**
 Environment Description: {env_description}
@@ -113,20 +138,21 @@ Trajectory:
 {trajectory}
 
 **Output Requirements:**
-Output a **self-contained corrective Base Skill** as JSON:
-- `activation_condition`: Task type + what went wrong (e.g., "for boiling tasks where agent failed to use correct container or heat source").
-- `execution_procedure`: Corrected procedure with explicit error-avoidance rules. If reward > 0, identify which sub-goals succeeded and what broke down.
-- `termination_condition`: When this corrective skill is complete.
+- `activation_condition`: Task type + the specific wrong assumption or failure condition. Format: "Applicable when [task_type_tag] ..."
+- `execution_procedure`: Use exactly these two labeled sections:
+  [FAILED]: Actions attempted and exact environment responses showing failure. If reward > 0, identify which sub-goals succeeded before breakdown.
+  [UNEXPLORED]: Plausible approaches this agent never attempted — prevents future agents from treating this failure as proof those approaches are impossible.
+- `termination_condition`: Leave empty string.
 
 Output ONLY the JSON:
 {{
     "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
-TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract the **Science Task Skill Delta** — new strategic knowledge NOT covered by existing memories.
+TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract ONLY the minimal new patch not covered by existing skills.
 
 === EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {retrieved_task_memory}
@@ -140,16 +166,19 @@ Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing memories. What task types and procedures do they cover?
-2. FIND genuinely NEW knowledge: different action syntax, edge case, efficiency improvement, or new precondition.
-3. Output ONLY the new Skill Delta as JSON.
+Output {{"skip": true}} ONLY if you can satisfy ALL of the following, with direct evidence:
+1. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
+2. No action in this trajectory required a recovery step, a different item category, or a procedural order not covered by that quoted text.
+If you cannot quote matching text for even ONE action in this trajectory, you MUST write a delta.
 
-- `activation_condition`: The SPECIFIC NEW condition that activates this delta. Must differ from existing.
-- `execution_procedure`: NEW steps/rules only. Self-contained, no references to existing memories.
+Otherwise, output the smallest delta (1-3 new observations max):
+- `activation_condition`: The SPECIFIC NEW condition that activates this delta — must differ from existing triggers.
+- `execution_procedure`: NEW steps/rules only. Concrete and self-contained, no references to existing memories.
 - `termination_condition`: When this delta modification is complete.
 
-Output ONLY the JSON:
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
     "execution_procedure": "...",
@@ -157,7 +186,7 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor. Identify the **gap in existing science task skills** that caused this failure.
+TaskTree_Prompt_Map['node_failure'] = """You are a Failure Recorder. Record the gap in existing skills that caused this failure.
 
 === EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {retrieved_task_memory}
@@ -172,20 +201,22 @@ Note: Reward > 0 means some sub-goals were completed correctly before failure.
 Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing skills. What do they recommend?
-2. IDENTIFY the specific gap. If reward > 0, identify which sub-goals succeeded before breakdown.
-3. Output ONLY the corrective Skill Delta as JSON.
+Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and the exact environment responses from that record that match this trajectory. If the failed action sequence or environment response differs in any way, you MUST write a new record.
 
-- `activation_condition`: The specific new situation existing skills failed to handle.
-- `execution_procedure`: Corrective procedure filling the gap. Self-contained.
-- `termination_condition`: When this corrective delta is complete.
+Otherwise, output the gap as a trap record:
+- `activation_condition`: The specific new situation existing skills failed to handle. Format: "Applicable when [task_type_tag] and ..."
+- `execution_procedure`: Use exactly these two labeled sections:
+  [FAILED]: Actions attempted and exact environment responses. Note which existing skill guidance was followed but did not work. If reward > 0, identify which sub-goals succeeded before breakdown.
+  [UNEXPLORED]: Plausible approaches this agent never attempted — prevents future agents from treating this failure as proof those approaches are impossible.
+- `termination_condition`: Leave empty string.
 
-Output ONLY the JSON:
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": "..."
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
@@ -196,7 +227,7 @@ Output ONLY the JSON:
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You are a Skill Extractor for Environment Knowledge. Extract a **Base Environment Skill** for navigating this ScienceWorld environment.
+EnvTree_Prompt_Map['root_success'] = """You are an Environment Knowledge Extractor. Extract declarative **Base Environment Knowledge** for navigating this ScienceWorld environment.
 
 **Full Scenario:**
 Environment Description: {env_description}
@@ -207,12 +238,13 @@ Trajectory:
 {trajectory}
 
 **Output Requirements:**
-Your output will be triggered DIRECTLY in similar environments with NO access to this trajectory.
+This is DECLARATIVE KNOWLEDGE — facts about the world, not a procedure to execute.
+Your output will be retrieved in similar environments with NO access to this trajectory.
 
-Output a **self-contained Base Environment Skill** as JSON:
-- `activation_condition`: The environment type + key features (e.g., "in ScienceWorld environments containing a kitchen with a stove, a foundry with a metal pot, and a greenhouse").
-- `execution_procedure`: Complete self-contained environment knowledge: (A) item-room location patterns (what is where), (B) device operation rules and action syntax, (C) efficient search order, (D) common pitfalls.
-- `termination_condition`: When environment navigation is complete (e.g., "required items located and retrieved; ready for experiment actions").
+Output **self-contained Base Environment Knowledge** as JSON:
+- `activation_condition`: Environment type + key structural features (e.g., "Applicable in ScienceWorld environments containing a kitchen with stove and a foundry with metal containers"). Format: "Applicable in [environment_type] environments where ..."
+- `execution_procedure`: Factual observations only — (A) item-room location patterns observed (what is where), (B) device operation rules and action syntax from environment feedback, (C) efficient search order, (D) common pitfalls. Write as observations ("items tend to be in..."), NOT as commands.
+- `termination_condition`: When this environment knowledge has been fully applied (e.g., required items located and retrieved; ready for experiment actions).
 
 Output ONLY the JSON:
 {{
@@ -222,7 +254,7 @@ Output ONLY the JSON:
 }}
 """
 
-EnvTree_Prompt_Map['root_failure'] = """You are a Skill Extractor for Environment Knowledge. Extract a **corrective Base Environment Skill** from this failed experiment.
+EnvTree_Prompt_Map['root_failure'] = """You are an Environment Knowledge Extractor. Record what environment traps or wrong assumptions caused this failure as **Base Environment Knowledge**.
 
 **Full Scenario:**
 Environment Description: {env_description}
@@ -234,22 +266,24 @@ Trajectory:
 {trajectory}
 
 **Output Requirements:**
-Output a **self-contained corrective Base Environment Skill** as JSON:
-- `activation_condition`: Environment type + the specific trap/pitfall that caused failure.
-- `execution_procedure`: Corrective environment knowledge. If reward > 0, analyze which environment interactions succeeded before failure.
-- `termination_condition`: When environment-specific pitfalls have been addressed.
+Record only what was observed. Do not state correct rules — the trajectory may not have shown a successful interaction.
+
+Output **self-contained corrective Base Environment Knowledge** as JSON:
+- `activation_condition`: Environment type + the specific trap or wrong assumption that caused failure. Format: "Applicable in [environment_type] environments where ..."
+- `execution_procedure`: Factual observations — what was tried, what the environment responded, what pitfalls exist. If reward > 0, note which environment interactions succeeded before failure.
+- `termination_condition`: Leave empty.
 
 Output ONLY the JSON:
 {{
     "activation_condition": "...",
     "execution_procedure": "...",
-    "termination_condition": "..."
+    "termination_condition": ""
 }}
 """
 
-EnvTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor for Environment Knowledge. Extract the **Environment Skill Delta** — new knowledge NOT covered by existing memories.
+EnvTree_Prompt_Map['node_success'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge.
 
-=== EXISTING ENVIRONMENT SKILL MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING ENVIRONMENT KNOWLEDGE (already stored — DO NOT REPEAT) ===
 {retrieved_env_memory}
 === END ===
 
@@ -261,16 +295,16 @@ Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing memories. What item locations and device rules do they cover?
-2. FIND genuinely NEW environment knowledge: new item-room mapping, new device rule, new pitfall.
-3. Output ONLY the new Environment Skill Delta as JSON.
+Output {{"skip": true}} ONLY when EVERY item-room mapping AND EVERY device/equipment interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. If even ONE location pattern or device rule is not explicitly covered, you MUST write an update.
 
-- `activation_condition`: The specific new environment condition that activates this delta.
-- `execution_procedure`: NEW environment knowledge only. Self-contained.
+Otherwise, output the smallest new update (1-3 new facts max):
+- `activation_condition`: The specific new environment condition. Format: "Applicable in [environment_type] environments where ..."
+- `execution_procedure`: NEW declarative observations only — new item-room tendencies or device rules not in existing knowledge. Written as facts ("items tend to be in..."), not commands.
 - `termination_condition`: When this environment adaptation is complete.
 
-Output ONLY the JSON:
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
     "execution_procedure": "...",
@@ -278,9 +312,9 @@ Output ONLY the JSON:
 }}
 """
 
-EnvTree_Prompt_Map['node_failure'] = """You are a Skill Delta Extractor for Environment Knowledge. Identify the **environment knowledge gap** that caused this failure.
+EnvTree_Prompt_Map['node_failure'] = """You are an Environment Knowledge Extractor. Identify the environment knowledge gap that caused this failure.
 
-=== EXISTING ENVIRONMENT SKILL MEMORIES (already stored — DO NOT REPEAT) ===
+=== EXISTING ENVIRONMENT KNOWLEDGE (already stored — DO NOT REPEAT) ===
 {retrieved_env_memory}
 === END ===
 
@@ -293,20 +327,20 @@ Note: Reward > 0 means some sub-goals were completed correctly before failure.
 Trajectory:
 {trajectory}
 
-**Output Requirements:**
-1. READ existing memories.
-2. IDENTIFY the gap. If reward > 0, identify which environment interactions succeeded before failure.
-3. Output ONLY the corrective Environment Skill Delta as JSON.
+Output {{"skip": true}} ONLY if an existing knowledge entry already explicitly describes the EXACT SAME wrong assumption or environment trap observed in this trajectory — quote the specific entry. If the gap differs in any way, you MUST write a new record.
 
-- `activation_condition`: The specific new environment situation existing memories failed to cover.
-- `execution_procedure`: Corrective environment rule. Self-contained.
-- `termination_condition`: When this environment correction is complete.
+Otherwise, output the corrective knowledge update:
+- `activation_condition`: The specific new environment situation existing knowledge failed to cover. Format: "Applicable in [environment_type] environments where ..."
+- `execution_procedure`: Corrective factual observations — what was tried, what the environment responded, what trap exists. If reward > 0, note which environment interactions succeeded before failure. Written as facts, not commands.
+- `termination_condition`: Leave empty.
 
-Output ONLY the JSON:
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
     "activation_condition": "...",
     "execution_procedure": "...",
-    "termination_condition": "..."
+    "termination_condition": ""
 }}
 """
 

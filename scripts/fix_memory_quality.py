@@ -105,7 +105,7 @@ def fix_tree_file(filepath: str) -> dict:
 
 
 def main():
-    base = Path('/data/REDACTED_USER/PRTree/Mind2web/storage')
+    base = Path('/hdd/REDACTED_USER/DeltaMem/Mind2web/storage')
     files = {
         'task_tree': str(base / 'prtree_dual_mind2web_task.json'),
         'env_tree':  str(base / 'prtree_dual_mind2web_env.json'),
