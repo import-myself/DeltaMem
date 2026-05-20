@@ -9,6 +9,7 @@ EnvTree:  以环境描述为索引，存储声明性知识（环境布局、物�
 import json
 import logging
 import time
+from collections import deque
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 import numpy as np
@@ -91,6 +92,36 @@ class PRTreeMemory:
 
         return path
 
+    def retrieve_context_path_flat(self, query_text: str) -> List[MemoryNode]:
+        """全局平铺检索：跨越层级在整棵树中找最相似节点，返回其完整祖先路径。
+        避免层级阈值导致深层好节点因父节点相似度不足而被截断。
+        """
+        query_emb = self.retriever.encode(query_text)
+
+        # BFS 收集全树所有非根节点
+        all_nodes: List[MemoryNode] = []
+        queue = deque(self.root.children)
+        while queue:
+            node = queue.popleft()
+            all_nodes.append(node)
+            queue.extend(node.children)
+
+        if not all_nodes:
+            return [self.root]
+
+        # 全局 top-1，使用 base_threshold（不按层级递增），保留 failure_penalty
+        match = self.retriever.retrieve_best_match(
+            query_emb, all_nodes,
+            threshold=self.base_threshold,
+            failure_penalty=FAILURE_NODE_PENALTY,
+        )
+
+        if match is None:
+            return [self.root]
+
+        # 沿 parent 链回溯到根，得到完整路径 [root → ... → best_node]
+        return match[0].get_path_to_root()
+
     # ------------------------------------------------------------------
     # 写入（直接接受 skill dict）
     # ------------------------------------------------------------------
@@ -116,6 +147,7 @@ class PRTreeMemory:
             parent=parent,
         )
         node.payload["activation_condition"] = skill.get("activation_condition", "")
+        node.payload["trajectory"] = skill.get("trajectory")
         node.payload["execution_procedure"] = skill.get("execution_procedure", "")
         node.payload["termination_condition"] = skill.get("termination_condition", "")
         self.node_index[node.node_id] = node
@@ -248,6 +280,18 @@ class DualTreeMemory:
         return {
             "task_path": self.retrieve_task_path(task_description),
             "env_path": self.retrieve_env_path(env_description),
+        }
+
+    def retrieve_task_path_flat(self, task_description: str) -> List[MemoryNode]:
+        return self.task_tree.retrieve_context_path_flat(task_description)
+
+    def retrieve_env_path_flat(self, env_description: str) -> List[MemoryNode]:
+        return self.env_tree.retrieve_context_path_flat(env_description)
+
+    def retrieve_dual_paths_flat(self, task_description: str, env_description: str) -> Dict[str, List[MemoryNode]]:
+        return {
+            "task_path": self.retrieve_task_path_flat(task_description),
+            "env_path": self.retrieve_env_path_flat(env_description),
         }
 
     # ------------------------------------------------------------------

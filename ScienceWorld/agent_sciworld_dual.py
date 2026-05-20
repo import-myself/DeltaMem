@@ -203,7 +203,7 @@ class DualTreeSciWorldAgent:
             logger.info(f"🔌 External memory injected ({len(external_memory_str)} chars), skipping PRTree retrieval.")
         else:
             # 获取两棵树的检索路径（无论 memory_mode 如何，均检索两棵树，路径用于写入）
-            dual_paths = self.reader.get_dual_paths(task_description, env_description)
+            dual_paths = self.dual_memory.retrieve_dual_paths_flat(task_description, env_description)
             task_path = dual_paths["task_path"]
             env_path = dual_paths["env_path"]
 
@@ -511,7 +511,7 @@ class DualTreeSciWorldAgent:
             "" if env_is_root
             else self.reader.render_env_path_for_reflection(env_path)
         )
-        env_prompt_key = get_env_prompt_key(env_is_root, success)
+        env_prompt_key = get_env_prompt_key(env_is_root)
         env_template = EnvTree_Prompt_Map[env_prompt_key]
 
         if env_is_root:

@@ -227,12 +227,12 @@ OR
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You are an Environment Knowledge Extractor. Extract declarative **Base Environment Knowledge** for navigating this ScienceWorld environment.
+EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative **Base Environment Knowledge** for navigating this ScienceWorld environment — regardless of whether the task succeeded or failed, the environmental observations are valid knowledge.
 
 **Full Scenario:**
 Environment Description: {env_description}
 Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
+Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
 Trajectory:
 {trajectory}
@@ -242,9 +242,9 @@ This is DECLARATIVE KNOWLEDGE — facts about the world, not a procedure to exec
 Your output will be retrieved in similar environments with NO access to this trajectory.
 
 Output **self-contained Base Environment Knowledge** as JSON:
-- `activation_condition`: Environment type + key structural features (e.g., "Applicable in ScienceWorld environments containing a kitchen with stove and a foundry with metal containers"). Format: "Applicable in [environment_type] environments where ..."
+- `activation_condition`: Environment type + key structural features. Format: "Applicable in [environment_type] environments where ..."
 - `execution_procedure`: Factual observations only — (A) item-room location patterns observed (what is where), (B) device operation rules and action syntax from environment feedback, (C) efficient search order, (D) common pitfalls. Write as observations ("items tend to be in..."), NOT as commands.
-- `termination_condition`: When this environment knowledge has been fully applied (e.g., required items located and retrieved; ready for experiment actions).
+- `termination_condition`: When this environment knowledge has been fully applied.
 
 Output ONLY the JSON:
 {{
@@ -254,34 +254,7 @@ Output ONLY the JSON:
 }}
 """
 
-EnvTree_Prompt_Map['root_failure'] = """You are an Environment Knowledge Extractor. Record what environment traps or wrong assumptions caused this failure as **Base Environment Knowledge**.
-
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed correctly before failure.
-
-Trajectory:
-{trajectory}
-
-**Output Requirements:**
-Record only what was observed. Do not state correct rules — the trajectory may not have shown a successful interaction.
-
-Output **self-contained corrective Base Environment Knowledge** as JSON:
-- `activation_condition`: Environment type + the specific trap or wrong assumption that caused failure. Format: "Applicable in [environment_type] environments where ..."
-- `execution_procedure`: Factual observations — what was tried, what the environment responded, what pitfalls exist. If reward > 0, note which environment interactions succeeded before failure.
-- `termination_condition`: Leave empty.
-
-Output ONLY the JSON:
-{{
-    "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": ""
-}}
-"""
-
-EnvTree_Prompt_Map['node_success'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge.
+EnvTree_Prompt_Map['node'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge — regardless of task outcome.
 
 === EXISTING ENVIRONMENT KNOWLEDGE (already stored — DO NOT REPEAT) ===
 {retrieved_env_memory}
@@ -290,7 +263,7 @@ EnvTree_Prompt_Map['node_success'] = """You are an Environment Knowledge Extract
 **Current Experience:**
 Environment Description: {env_description}
 Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
+Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
 Trajectory:
 {trajectory}
@@ -312,38 +285,6 @@ OR
 }}
 """
 
-EnvTree_Prompt_Map['node_failure'] = """You are an Environment Knowledge Extractor. Identify the environment knowledge gap that caused this failure.
-
-=== EXISTING ENVIRONMENT KNOWLEDGE (already stored — DO NOT REPEAT) ===
-{retrieved_env_memory}
-=== END ===
-
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed correctly before failure.
-
-Trajectory:
-{trajectory}
-
-Output {{"skip": true}} ONLY if an existing knowledge entry already explicitly describes the EXACT SAME wrong assumption or environment trap observed in this trajectory — quote the specific entry. If the gap differs in any way, you MUST write a new record.
-
-Otherwise, output the corrective knowledge update:
-- `activation_condition`: The specific new environment situation existing knowledge failed to cover. Format: "Applicable in [environment_type] environments where ..."
-- `execution_procedure`: Corrective factual observations — what was tried, what the environment responded, what trap exists. If reward > 0, note which environment interactions succeeded before failure. Written as facts, not commands.
-- `termination_condition`: Leave empty.
-
-Output ONLY one of these two JSON formats:
-{{"skip": true}}
-OR
-{{
-    "activation_condition": "...",
-    "execution_procedure": "...",
-    "termination_condition": ""
-}}
-"""
-
 
 # =================================================================
 # Helper 函数
@@ -355,8 +296,5 @@ def get_task_prompt_key(is_root: bool, is_success: bool) -> str:
     else:
         return "node_success" if is_success else "node_failure"
 
-def get_env_prompt_key(is_root: bool, is_success: bool) -> str:
-    if is_root:
-        return "root_success" if is_success else "root_failure"
-    else:
-        return "node_success" if is_success else "node_failure"
+def get_env_prompt_key(is_root: bool, is_success: bool = True) -> str:
+    return "root" if is_root else "node"

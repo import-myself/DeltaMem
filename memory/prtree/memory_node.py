@@ -64,7 +64,8 @@ class MemoryNode:
             "scenario_description": scenario_description,
             # Skill 字段（由 DualMemoryWriter 填充）
             "activation_condition": None,
-            "execution_procedure": None,
+            "trajectory": None,        # 根节点成功时存储的具体轨迹（ICL 示例）
+            "execution_procedure": None,  # 根节点=hint提示；子节点=修订/patch
             "termination_condition": None,
         }
 
@@ -156,6 +157,7 @@ class MemoryNode:
             payload.get("activation_condition")
             or payload.get("memory_description")
         )
+        node.payload["trajectory"] = payload.get("trajectory")
         node.payload["execution_procedure"] = (
             payload.get("execution_procedure")
             or payload.get("content_body")

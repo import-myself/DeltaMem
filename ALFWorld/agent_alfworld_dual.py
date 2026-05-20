@@ -190,7 +190,7 @@ class DualTreeReflectiveAgent:
             logger.info(f"🔌 External memory injected ({len(external_memory_str)} chars), skipping PRTree retrieval.")
         else:
             # 获取两棵树的检索路径（无论 memory_mode 如何，均检索两棵树，路径用于写入）
-            dual_paths = self.reader.get_dual_paths(task_goal, env_description)
+            dual_paths = self.dual_memory.retrieve_dual_paths_flat(task_goal, env_description)
             task_path = dual_paths["task_path"]
             env_path = dual_paths["env_path"]
 

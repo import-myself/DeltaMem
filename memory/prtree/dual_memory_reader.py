@@ -31,12 +31,26 @@ class DualMemoryReader:
         is_success = node.meta.get("result_status") == ResultStatus.SUCCESS
 
         if is_success:
-            title = f"[Base Skill] [✅ SUCCESS]" if is_base else f"[Skill Delta {delta_idx}] [✅ SUCCESS]"
-            text = f"### {title}\n"
-            text += f"- **Trigger**: {payload['activation_condition']}\n"
-            text += f"- **Procedure**:\n{payload['execution_procedure']}\n"
-            if payload.get("termination_condition"):
-                text += f"- **Done when**: {payload['termination_condition']}\n"
+            if is_base:
+                text = f"### [Base Skill] [✅ SUCCESS]\n"
+                text += f"- **Trigger**: {payload['activation_condition']}\n"
+                if payload.get("trajectory"):
+                    # 新格式：trajectory（具体轨迹）+ execution_procedure（hint提示）
+                    text += f"\n**Reference Trajectory** (read and imitate the reasoning pattern):\n"
+                    text += payload["trajectory"].replace("\\n", "\n") + "\n"
+                    if payload.get("execution_procedure"):
+                        text += f"\n**Key Tip**: {payload['execution_procedure']}\n"
+                else:
+                    # 旧格式兼容
+                    text += f"- **Procedure**:\n{payload['execution_procedure']}\n"
+                if payload.get("termination_condition"):
+                    text += f"- **Done when**: {payload['termination_condition']}\n"
+            else:
+                text = f"### [Skill Patch {delta_idx}] [✅ SUCCESS]\n"
+                text += f"- **When to apply**: {payload['activation_condition']}\n"
+                text += f"- **Revision / Additional notes**:\n{payload['execution_procedure']}\n"
+                if payload.get("termination_condition"):
+                    text += f"- **Done when**: {payload['termination_condition']}\n"
         else:
             title = f"[Base Failure Record] [⛔ FAILURE]" if is_base else f"[Failure Record {delta_idx}] [⛔ FAILURE]"
             text = f"### {title}\n"
@@ -122,7 +136,7 @@ class DualMemoryReader:
                 "Start with the **Base Skill** as your foundation procedure. "
                 "If any **Skill Delta** below has a trigger condition that matches your current situation, "
                 "apply it on top of the base — otherwise execute the base directly. "
-                "Object IDs and numbers are from past episodes — adapt them to the current environment.\n\n"
+                "Specific values (item names, locations, quantities) are from past episodes — adapt them to the current environment.\n\n"
                 f"{task_text}"
             )
         if env_text:
@@ -132,7 +146,7 @@ class DualMemoryReader:
                 "Use it to decide WHERE to search for objects and HOW to operate receptacles/appliances. "
                 "Start with the **Base Environment Knowledge**, then apply any **Environment Knowledge Updates** "
                 "whose scenario matches your current environment. "
-                "Object IDs and numbers are from past episodes — do NOT reuse them.\n\n"
+                "Specific values (item names, locations, states) are from past episodes — verify with observation if in doubt.\n\n"
                 f"{env_text}"
             )
         return "\n---\n\n".join(sections)
@@ -159,10 +173,15 @@ class DualMemoryReader:
             is_success = node.meta["result_status"] == ResultStatus.SUCCESS
             if is_task_tree:
                 if is_success:
-                    label = "Base Skill" if idx == 1 else f"Skill Delta {idx - 1}"
+                    label = "Base Skill" if idx == 1 else f"Skill Patch {idx - 1}"
                     text += f"[{label}] (✅ SUCCESS)\n"
                     text += f"  Activation: {payload['activation_condition']}\n"
-                    text += f"  Execution: {payload['execution_procedure']}\n"
+                    if payload.get("trajectory"):
+                        traj_preview = payload["trajectory"].replace("\\n", "\n")
+                        text += f"  Reference Trajectory:\n{traj_preview[:800]}\n"
+                        if len(payload["trajectory"]) > 800:
+                            text += "  ...[truncated]\n"
+                    text += f"  Key Tip: {payload['execution_procedure']}\n"
                     if payload.get("termination_condition"):
                         text += f"  Termination: {payload['termination_condition']}\n"
                 else:

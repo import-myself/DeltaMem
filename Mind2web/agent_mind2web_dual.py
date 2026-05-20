@@ -246,34 +246,47 @@ class DualTreeMind2WebAgent:
             logger.info(f"🔌 External memory injected ({len(external_memory_str)} chars), skipping PRTree retrieval.")
         else:
             # 获取两棵树的检索路径（无论 memory_mode 如何，均检索两棵树，路径用于写入）
-            dual_paths = self.reader.get_dual_paths(task_desc, env_key)
+            dual_paths = self.dual_memory.retrieve_dual_paths_flat(task_desc, env_key)
             task_path  = dual_paths["task_path"]
             env_path   = dual_paths["env_path"]
 
             # 根据 memory_mode 决定注入 Prompt 的记忆内容
+            # Mind2Web 专用 wrapper：用 decision-pitfall 介绍语取代 reader 默认的 procedural 介绍语
+            _TASK_INTRO = (
+                "# Task Pitfall Memory (decision hints)\n"
+                "Each entry below is a SHORT decision-pitfall extracted from past episodes — "
+                "a caution about which element to PICK among ambiguous look-alikes on similar tasks. "
+                "At every step, check whether the current Observation matches any entry's 'Trigger' situation; "
+                "if so, prefer the element the entry recommends. Do NOT treat these as multi-step procedures. "
+                "Element IDs in past memory are stale — match candidates by aria-label, placeholder, "
+                "visible text, or role.\n\n"
+            )
+            _ENV_INTRO = (
+                "# Website Knowledge Memory (declarative UI facts)\n"
+                "Background knowledge about this website's UI behaviour — not a procedure. "
+                "Use it to decide HOW components react and WHERE to look. "
+                "Object IDs are from past episodes — do NOT reuse them.\n\n"
+            )
             if memory_mode == "task_only":
                 task_text = self.reader.render_task_memory(task_path)
-                memory_context = (
-                    "# Task Strategy Memory\n"
-                    "The following are experiences from similar tasks that may help guide your workflow and strategy:\n\n"
-                    f"{task_text}"
-                ) if task_text else None
+                memory_context = (_TASK_INTRO + task_text) if task_text else None
                 task_memory_used = not self.reader._is_empty_path(task_path)
                 env_memory_used  = False
             elif memory_mode == "env_only":
                 env_text = self.reader.render_env_memory(env_path)
-                memory_context = (
-                    "# Environment Knowledge Memory\n"
-                    "The following are experiences from similar environments:\n\n"
-                    f"{env_text}"
-                ) if env_text else None
+                memory_context = (_ENV_INTRO + env_text) if env_text else None
                 task_memory_used = False
                 env_memory_used  = not self.reader._is_empty_path(env_path)
             else:
-                # "both"：双树融合（默认行为）
-                memory_context   = self.reader.get_dual_narrative_context(
-                    task_desc, env_key, task_path=task_path, env_path=env_path
-                )
+                # "both"：双树融合（默认行为）— 同样使用 pitfall 介绍语
+                task_text = self.reader.render_task_memory(task_path)
+                env_text  = self.reader.render_env_memory(env_path)
+                sections = []
+                if task_text:
+                    sections.append(_TASK_INTRO + task_text)
+                if env_text:
+                    sections.append(_ENV_INTRO + env_text)
+                memory_context = "\n---\n\n".join(sections) if sections else None
                 task_memory_used = not self.reader._is_empty_path(task_path)
                 env_memory_used  = not self.reader._is_empty_path(env_path)
 
@@ -451,6 +464,7 @@ class DualTreeMind2WebAgent:
             element_acc_list=element_acc_list,
             action_f1_list=action_f1_list,
             step_success_list=step_success_list,
+            conversation=conversation,
         )
 
         status = ResultStatus.SUCCESS if success else ResultStatus.FAILURE
@@ -538,30 +552,35 @@ class DualTreeMind2WebAgent:
         element_acc_list: List[float] = None,
         action_f1_list: List[float] = None,
         step_success_list: List[int] = None,
+        conversation: List[Any] = None,
     ) -> Tuple[Dict[str, str], Dict[str, str]]:
-        # 构建带指标摘要的 trajectory 字符串
-        # Mind2Web 成功条件：ALL steps 的 element_acc=1 AND action_f1=1 AND step_success=1
+        # 构建带指标摘要的 trajectory 字符串（多维度标注）
         if element_acc_list and action_f1_list and step_success_list:
             avg_elem  = np.mean(element_acc_list)
             avg_f1    = np.mean(action_f1_list)
             avg_step  = np.mean(step_success_list)
+            n_elem_ok = sum(1 for e in element_acc_list if e == 1)
+            n_step_ok = sum(1 for s in step_success_list if s == 1)
+            n_total   = len(step_success_list)
+            elem_tag  = "✓" if avg_elem >= 0.5 else "✗"
+            f1_tag    = "✓" if avg_f1 >= 0.5 else "✗"
+            step_tag  = "✓" if avg_step >= 0.5 else "✗"
             metrics_summary = (
-                f"[Mind2Web Metrics] "
-                f"element_acc={avg_elem:.3f} (correct element selected per step) | "
-                f"action_f1={avg_f1:.3f} (op+value token F1 per step) | "
-                f"step_success={avg_step:.3f} (exact full-step match per step)\n"
-                f"[Success Condition] ALL steps must satisfy: element correct AND action_f1=1 AND step_success=1\n"
-                f"[Overall] {'SUCCESS' if success else 'FAILURE'} "
-                f"(failed steps: {sum(1 for s in step_success_list if s == 0)}/{len(step_success_list)})"
+                f"[Dimension Scores]\n"
+                f"  Element Identification: {avg_elem:.2f} ({n_elem_ok}/{n_total} correct) {elem_tag}\n"
+                f"  Action Type & Value:    {avg_f1:.2f} (F1) {f1_tag}\n"
+                f"  Full Step Match:        {avg_step:.2f} ({n_step_ok}/{n_total} correct) {step_tag}\n"
+                f"[Guidance] Extract knowledge ONLY from ✓ dimensions. "
+                f"For ✗ dimensions, note what went wrong but do NOT generalize these as correct procedures."
             )
         else:
             metrics_summary = f"[Overall] {'SUCCESS' if success else 'FAILURE'}"
         traj_str = metrics_summary + "\n\nStep-by-step Trajectory:\n" + "\n".join(trajectory)
 
-        # --- 步骤级失败分析 (改进2) ---
-        # 从 trajectory 中提取 element_acc=0 的步骤，供反思 LLM 做元素辨识分析
-        failed_steps_analysis = self._build_failed_steps_analysis(
-            trajectory, element_acc_list, action_f1_list, step_success_list, success
+        # --- 步骤级因果分析（对错步附加 observation 摘要，让反思 LLM 看到 pred/target 的 HTML 上下文）---
+        step_causal_analysis = self._build_step_causal_analysis(
+            trajectory, element_acc_list, action_f1_list, step_success_list, success,
+            conversation=conversation,
         )
 
         # --- Task Tree Reflection ---
@@ -578,7 +597,7 @@ class DualTreeMind2WebAgent:
                 task_description=task_goal,
                 steps=steps,
                 trajectory=traj_str,
-                failed_steps_analysis=failed_steps_analysis,
+                step_causal_analysis=step_causal_analysis,
             )
         else:
             task_prompt = task_template.format(
@@ -587,7 +606,7 @@ class DualTreeMind2WebAgent:
                 retrieved_task_memory=task_compare_memory,
                 steps=steps,
                 trajectory=traj_str,
-                failed_steps_analysis=failed_steps_analysis,
+                step_causal_analysis=step_causal_analysis,
             )
         task_resp = self.llm_client.chat([{"role": "user", "content": task_prompt}], temperature=0.0, max_tokens=8192)
         if _ELEMENT_ID_RE.search(task_resp):
@@ -608,22 +627,25 @@ class DualTreeMind2WebAgent:
         )
         env_key      = get_env_prompt_key(env_is_root, success)
         env_template = EnvTree_Prompt_Map[env_key]
+        result_str   = "SUCCESS" if success else "FAILURE"
         if env_is_root:
             env_prompt = env_template.format(
                 env_description=env_description,
                 task_description=task_goal,
+                result=result_str,
                 steps=steps,
                 trajectory=traj_str,
-                failed_steps_analysis=failed_steps_analysis,
+                step_causal_analysis=step_causal_analysis,
             )
         else:
             env_prompt = env_template.format(
                 env_description=env_description,
                 task_description=task_goal,
+                result=result_str,
                 retrieved_env_memory=env_compare_memory,
                 steps=steps,
                 trajectory=traj_str,
-                failed_steps_analysis=failed_steps_analysis,
+                step_causal_analysis=step_causal_analysis,
             )
         env_resp = self.llm_client.chat([{"role": "user", "content": env_prompt}], temperature=0.0, max_tokens=8192)
         if _ELEMENT_ID_RE.search(env_resp):
@@ -642,44 +664,102 @@ class DualTreeMind2WebAgent:
     # 工具方法
     # =================================================================
 
-    def _build_failed_steps_analysis(
+    def _build_step_causal_analysis(
         self,
         trajectory: List[str],
         element_acc_list: Optional[List[float]],
         action_f1_list: Optional[List[float]],
         step_success_list: Optional[List[int]],
         success: bool,
+        conversation: Optional[List[Any]] = None,
     ) -> str:
-        """
-        从逐步指标中提取 element_acc=0 的步骤，构建供反思 LLM 使用的失败分析摘要。
-        成功 episode 返回简短的全通过说明。
-        """
-        if success or not element_acc_list:
-            return "All steps passed — no element selection failures to analyze."
+        if not element_acc_list:
+            return "No per-step metrics available."
 
-        failed_lines = []
+        # 提取每个真实 step 对应的 user observation（来自 conversation 的 input/output 对）
+        # 所有步骤（对/错）都附 observation 摘要 — 反思 LLM 才能：
+        #   • 对错步：把 pred/target ID 映射到语义元素，识别决策歧义
+        #   • 对对步：记录"什么 observation 信号让这个 element 成为正确选择"
+        # 错步多给 budget，对步给少一点，避免 prompt 总长爆炸
+        OBS_BUDGET_WRONG = 1200
+        OBS_BUDGET_RIGHT = 600
+        step_obs = []
+        if conversation:
+            for turn in conversation:
+                if isinstance(turn, dict) and 'input' in turn and 'output' in turn:
+                    last_user = turn['input'][-1] if turn['input'] else {}
+                    content = last_user.get('content', '') if isinstance(last_user, dict) else ''
+                    m = re.search(r"Observation: `(.+?)`", content, re.DOTALL)
+                    step_obs.append(m.group(1) if m else "")
+
         traj_steps = [t for t in trajectory if t.startswith("Step ")]
-        for i, (e_acc, f1, s_ok) in enumerate(zip(element_acc_list, action_f1_list or [], step_success_list or [])):
-            if e_acc == 0 or s_ok == 0:
-                traj_line = traj_steps[i] if i < len(traj_steps) else f"Step {i+1}: (no trajectory info)"
-                if e_acc == 0:
-                    # 元素选错：主要影响 element_acc 和 step_success
-                    failure_type = f"WRONG ELEMENT (element_acc=0, action_f1={f1:.2f}, step_success={int(s_ok)})"
-                    hint = "Analyze: what semantic/structural signals distinguish the CORRECT element from the selected one?"
-                else:
-                    # 元素对但 op/value 错：主要影响 step_success，拉低 action_f1
-                    failure_type = f"WRONG OP/VALUE (element_acc=1, action_f1={f1:.2f}, step_success={int(s_ok)})"
-                    hint = "Analyze: element was correct but action type (CLICK/TYPE/SELECT) or value string was wrong — what is the correct format/value?"
-                failed_lines.append(
-                    f"- {traj_line}\n"
-                    f"  → Failure type: {failure_type}\n"
-                    f"  → {hint}"
-                )
+        lines = []
+        for i, (e_acc, f1, s_ok) in enumerate(zip(
+            element_acc_list, action_f1_list or [], step_success_list or []
+        )):
+            e_tag = "✓" if e_acc == 1 else "✗"
+            a_tag = "✓" if f1 == 1.0 else "✗"
+            traj_line = traj_steps[i] if i < len(traj_steps) else f"Step {i+1}: (no info)"
+            if e_acc == 1 and f1 == 1.0:
+                hint = "Both correct — what signal identified this element and action type? Extract as a reusable rule."
+            elif e_acc == 1 and f1 < 1.0:
+                hint = "Element CORRECT but action/value WRONG — why was the action type (CLICK/TYPE/SELECT) or value misidentified? What about the element indicates the correct action type?"
+            elif e_acc == 0 and f1 > 0:
+                hint = "Element WRONG but action partially matched — what caused the element confusion? What semantic attribute distinguishes the correct element?"
+            else:
+                hint = "Both wrong — what led to selecting the wrong element? What alternative signal should have been used?"
+            block = f"[{e_tag}elem {a_tag}act] {traj_line}\n  → {hint}"
 
-        if not failed_lines:
-            return "No element selection failures detected."
-        header = f"{len(failed_lines)} step(s) failed element selection:\n"
-        return header + "\n".join(failed_lines)
+            # 所有真实步骤都附 observation 摘要
+            if i < len(step_obs) and step_obs[i]:
+                is_wrong = (e_acc == 0)
+                budget = OBS_BUDGET_WRONG if is_wrong else OBS_BUDGET_RIGHT
+                obs_excerpt = step_obs[i]
+                if len(obs_excerpt) > budget:
+                    obs_excerpt = obs_excerpt[:budget] + " …[truncated]"
+                m = re.search(r"pred=`(.+?)`\s*\|\s*target=`(.+?)`", traj_line)
+                note = ""
+                if m:
+                    pred_act, target_act = m.group(1), m.group(2)
+                    if is_wrong:
+                        note = (
+                            f"\n  → ⚠️ FOCUS HERE: lookup the semantic role of pred={pred_act} (WRONG) and "
+                            f"target={target_act} (RIGHT) inside the Observation excerpt below. "
+                            f"This is the decision-ambiguity to capture as the pitfall."
+                        )
+                    else:
+                        note = (
+                            f"\n  → (Reference only — this step was correct.) Lookup element={target_act} "
+                            f"in the Observation excerpt to understand context. "
+                            f"Do NOT extract a pitfall from this correct step unless EVERY step succeeded "
+                            f"(i.e., a full-success trajectory)."
+                        )
+                label = "around the wrong choice" if is_wrong else "context for correct step"
+                block += note + f"\n  Observation excerpt ({label}):\n  ```\n  {obs_excerpt}\n  ```"
+
+            lines.append(block)
+
+        # 错步聚焦总结 — 让反思 LLM 一眼锁定 pitfall 抽取目标
+        wrong_step_indices = [
+            i + 1 for i, e_acc in enumerate(element_acc_list) if e_acc == 0
+        ]
+        if wrong_step_indices and not success:
+            focus = (
+                "\n\n=== ⚠️ ATTENTION: focus pitfall extraction on these wrong step(s) — "
+                f"Step {', Step '.join(str(s) for s in wrong_step_indices)} ===\n"
+                "Each wrong step above carries a labelled Observation excerpt. "
+                "The decision-ambiguity (which look-alike element to pick) lives in those excerpts. "
+                "Ignore correct steps when writing the pitfall: their excerpts are reference context only."
+            )
+            lines.append(focus)
+        elif success:
+            lines.append(
+                "\n\n=== ✅ FULL-SUCCESS trajectory — extract the most generalisable decision the agent made. ===\n"
+                "Pick the step whose Observation contained the most look-alike candidates and "
+                "write the pitfall as 'Click <semantic descriptor of chosen element> "
+                "not <semantic descriptor of a plausible decoy> because <reason>.'"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def _escape_json_strings(text: str) -> str:
