@@ -1,10 +1,11 @@
 """
-Dual PR-Tree Prompt Templates for ScienceWorld (v2.0 - Skill Format)
+Dual PR-Tree Prompt Templates for ScienceWorld (v3.0)
 
-v2.0 核心改进:
-- 反思 Prompt 重构为面向 Skill 的格式：activation_condition / execution_procedure / termination_condition
-- Root 节点 → Base Skill（基础科学任务技能）
-- Residual 节点 → Skill Delta（技能修正残差）
+v3.0 改进:
+- Env tree: 允许记录具体房间→物品映射（ScienceWorld 房间固定，不像 ALFWorld 随机）
+- Task tree: 格式对齐 ALFWorld lean 风格；强调 ScienceWorld 特有动作语法
+- node_success skip 规则：新增 partial reward 约束
+- Memory header：更具体描述 ScienceWorld 双树内容
 """
 
 # =================================================================
@@ -73,8 +74,8 @@ Now, it's your turn and here is the task.
 MEMORY_HEADERS: dict = {
     "prtree": (
         "Retrieved from your hierarchical memory system:\n"
-        "• Task Skill Memory — HOW to perform this science task type (Base Skill + Skill Deltas as patches)\n"
-        "• Environment Knowledge Memory — WHERE items are located and HOW devices/equipment operate\n"
+        "• Task Skill Memory — HOW to perform this science task type: exact action sequence, which room to find each item, device operation syntax (use/activate/connect), and what to watch out for.\n"
+        "• Environment Knowledge Memory — WHERE specific items are located across ScienceWorld rooms, and HOW devices/equipment respond to actions.\n"
         "Note: 'Trigger'/'Applicable scenario' labels describe PAST episodes — your actual task is at the end."
     ),
     "synapse": (
@@ -95,28 +96,23 @@ MEMORY_HEADERS: dict = {
 
 
 # =================================================================
-# 任务树反思 Prompt（ScienceWorld 版）— Skill 格式
+# 任务树反思 Prompt（ScienceWorld 版）
 # =================================================================
 
 TaskTree_Prompt_Map = {}
 
-TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Based on this successful scientific experiment trajectory, extract a **Base Skill** for this science task type.
+TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Extract a reusable Base Skill from this successful science experiment trajectory.
 
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-Your output will be placed in a global skill cache and triggered DIRECTLY with NO access to this trajectory.
-
-Output a **self-contained Base Skill** as JSON:
-- `activation_condition`: The science task TYPE precisely (e.g., for boiling tasks where the goal is to boil water or a liquid). Include all prerequisites (required rooms, equipment needed).
-- `execution_procedure`: Complete self-contained step-by-step procedure: (1) where to find items, (2) exact action sequence with action syntax (e.g., use thermometer on OBJ), (3) critical preconditions and pitfalls.
-- `termination_condition`: When this skill is complete (e.g., target substance has reached required state / reward > 0 confirmed).
+Output a self-contained Base Skill — future agents have NO access to this trajectory:
+- `activation_condition`: The science task TYPE and distinguishing features (e.g., "boiling tasks where the goal is to heat a liquid until it reaches its boiling point, requiring a heat source and thermometer").
+- `execution_procedure`: Concrete step-by-step procedure derived from this trajectory. Write out each action individually using exact ScienceWorld syntax (teleport to LOC / pick up OBJ / use OBJ on OBJ / focus on OBJ / pour OBJ into OBJ / mix OBJ / activate OBJ / connect OBJ to OBJ). Include: (1) which room each item is found in, (2) the full action sequence in order, (3) any critical preconditions or pitfalls.
+- `termination_condition`: When the skill is complete (e.g., reward > 0 confirmed / target substance reached required state).
 
 Output ONLY the JSON:
 {{
@@ -126,22 +122,19 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This output will be stored as a FAILURE RECORD — it is NOT a skill to execute. It will be shown to future agents with a ⛔ warning so they know what to avoid.
+TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This is a FAILURE RECORD — NOT a skill to execute. Future agents will see a ⛔ warning with this.
 
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
 Note: Reward > 0 means some sub-goals were completed correctly before failure.
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-- `activation_condition`: Task type + the specific wrong assumption or failure condition. Format: "Applicable when [task_type_tag] ..."
-- `execution_procedure`: Use exactly these two labeled sections:
+- `activation_condition`: Task type + the specific wrong assumption or failure condition that caused this outcome.
+- `execution_procedure`:
   [FAILED]: Actions attempted and exact environment responses showing failure. If reward > 0, identify which sub-goals succeeded before breakdown.
-  [UNEXPLORED]: Plausible approaches this agent never attempted — prevents future agents from treating this failure as proof those approaches are impossible.
+  [UNEXPLORED]: Plausible approaches this agent never attempted.
 - `termination_condition`: Leave empty string.
 
 Output ONLY the JSON:
@@ -158,22 +151,21 @@ TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extrac
 {retrieved_task_memory}
 === END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 
-Trajectory:
 {trajectory}
 
-Output {{"skip": true}} ONLY if you can satisfy ALL of the following, with direct evidence:
-1. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
-2. No action in this trajectory required a recovery step, a different item category, or a procedural order not covered by that quoted text.
-If you cannot quote matching text for even ONE action in this trajectory, you MUST write a delta.
+Output {{"skip": true}} ONLY if you can satisfy ALL of the following with direct evidence:
+1. Reward is 1.0 (full success — partial reward means a sub-goal was missed, which requires a delta).
+2. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
+3. No action in this trajectory required a recovery step, a different item, or a procedural order not covered by that quoted text.
+If ANY condition fails, you MUST write a delta.
 
 Otherwise, output the smallest delta (1-3 new observations max):
 - `activation_condition`: The SPECIFIC NEW condition that activates this delta — must differ from existing triggers.
-- `execution_procedure`: NEW steps/rules only. Concrete and self-contained, no references to existing memories.
+- `execution_procedure`: NEW steps/rules only. Concrete and self-contained, using exact ScienceWorld action syntax.
 - `termination_condition`: When this delta modification is complete.
 
 Output ONLY one of these two JSON formats:
@@ -192,22 +184,20 @@ TaskTree_Prompt_Map['node_failure'] = """You are a Failure Recorder. Record the 
 {retrieved_task_memory}
 === END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
 Note: Reward > 0 means some sub-goals were completed correctly before failure.
 
-Trajectory:
 {trajectory}
 
-Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and the exact environment responses from that record that match this trajectory. If the failed action sequence or environment response differs in any way, you MUST write a new record.
+Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and exact environment responses from that record matching this trajectory. If the failed action sequence or environment response differs in any way, write a new record.
 
 Otherwise, output the gap as a trap record:
-- `activation_condition`: The specific new situation existing skills failed to handle. Format: "Applicable when [task_type_tag] and ..."
-- `execution_procedure`: Use exactly these two labeled sections:
+- `activation_condition`: The specific situation existing skills failed to handle.
+- `execution_procedure`:
   [FAILED]: Actions attempted and exact environment responses. Note which existing skill guidance was followed but did not work. If reward > 0, identify which sub-goals succeeded before breakdown.
-  [UNEXPLORED]: Plausible approaches this agent never attempted — prevents future agents from treating this failure as proof those approaches are impossible.
+  [UNEXPLORED]: Plausible approaches this agent never attempted.
 - `termination_condition`: Leave empty string.
 
 Output ONLY one of these two JSON formats:
@@ -222,33 +212,34 @@ OR
 
 
 # =================================================================
-# 环境树反思 Prompt（ScienceWorld 版）— Skill 格式
+# 环境树反思 Prompt（ScienceWorld 版）
 # =================================================================
+#
+# 关键设计原则：ScienceWorld 的房间结构是固定的（kitchen / workshop / greenhouse 等），
+# 物品位置跨 episode 基本一致（不像 ALFWorld 每次随机摆放）。
+# 因此 env tree 应记录具体的 房间→物品 映射，而非 ALFWorld 式的类目归纳。
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative **Base Environment Knowledge** for navigating this ScienceWorld environment — regardless of whether the task succeeded or failed, the environmental observations are valid knowledge.
+EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative facts about this ScienceWorld environment from the trajectory — regardless of task outcome, the observations are valid knowledge.
 
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
-Trajectory:
 {trajectory}
 
-**Output Requirements:**
-This is DECLARATIVE KNOWLEDGE — facts about the world, not a procedure to execute.
-Your output will be retrieved in similar environments with NO access to this trajectory.
+Output self-contained Base Environment Knowledge — FACTS about the world, not a procedure to execute.
 
-Output **self-contained Base Environment Knowledge** as JSON:
-- `activation_condition`: Environment type + key structural features. Format: "Applicable in [environment_type] environments where ..."
-- `execution_procedure`: Factual observations only — (A) item-room location patterns observed (what is where), (B) device operation rules and action syntax from environment feedback, (C) efficient search order, (D) common pitfalls. Write as observations ("items tend to be in..."), NOT as commands.
+Important: Unlike ALFWorld, ScienceWorld rooms have CONSISTENT item placement across episodes. Record SPECIFIC room→item mappings (e.g., "the thermometer is in the kitchen"), not just category-level tendencies.
+
+- `activation_condition`: "Applicable in ScienceWorld environments where ..." — describe the task context or room configuration.
+- `execution_procedure`: Factual observations: (A) specific item locations by room (e.g., "thermometer: kitchen", "battery: workshop"), (B) device/equipment operation rules with exact action syntax (e.g., "use thermometer on OBJ to read temperature"), (C) efficient room search order for common items, (D) any pitfalls observed. Write as facts, not commands.
 - `termination_condition`: When this environment knowledge has been fully applied.
 
 Output ONLY the JSON:
 {{
-    "activation_condition": "...",
+    "activation_condition": "Applicable in ScienceWorld environments where ...",
     "execution_procedure": "...",
     "termination_condition": "..."
 }}
@@ -260,26 +251,26 @@ EnvTree_Prompt_Map['node'] = """You are an Environment Knowledge Extractor. Extr
 {retrieved_env_memory}
 === END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
-Trajectory:
 {trajectory}
 
-Output {{"skip": true}} ONLY when EVERY item-room mapping AND EVERY device/equipment interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. If even ONE location pattern or device rule is not explicitly covered, you MUST write an update.
+Important: ScienceWorld rooms have CONSISTENT item placement. Record specific room→item mappings when newly observed.
+
+Output {{"skip": true}} ONLY when EVERY item location AND EVERY device/equipment interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. If even ONE specific location or device rule is not explicitly covered, you MUST write an update.
 
 Otherwise, output the smallest new update (1-3 new facts max):
-- `activation_condition`: The specific new environment condition. Format: "Applicable in [environment_type] environments where ..."
-- `execution_procedure`: NEW declarative observations only — new item-room tendencies or device rules not in existing knowledge. Written as facts ("items tend to be in..."), not commands.
+- `activation_condition`: "Applicable in ScienceWorld environments where ..." — the new context covered.
+- `execution_procedure`: NEW facts only — specific item locations or device rules not in existing knowledge. Written as facts, not commands.
 - `termination_condition`: When this environment adaptation is complete.
 
 Output ONLY one of these two JSON formats:
 {{"skip": true}}
 OR
 {{
-    "activation_condition": "...",
+    "activation_condition": "Applicable in ScienceWorld environments where ...",
     "execution_procedure": "...",
     "termination_condition": "..."
 }}
