@@ -585,9 +585,6 @@ class DualTreeWebShopAgent:
             temperature=0.0, max_tokens=4096,
         )
         task_reflection = self._parse_json_response(task_resp)
-        # 根节点成功时直接存储原始轨迹，无需 LLM 重新生成
-        if task_is_root and success and isinstance(task_reflection, dict):
-            task_reflection["trajectory"] = traj_str
 
         # ---- Env tree reflection ----
         env_is_root = self.reader._is_empty_path(env_path)

@@ -69,15 +69,15 @@ MEMORY_HEADERS: dict = {
     "prtree": (
         "## How to use the memory below — READ CAREFULLY\n"
         "The memory contains three kinds of entries:\n"
-        "  • **[Base Skill]** — a SUCCESSFUL past shopping episode with two parts: (1) a **Reference Trajectory** showing the exact Observation→Thought→Action sequence, and (2) a **Key Tip** summarising the core strategy. **This Base Skill ALWAYS applies to your current task.** Treat the Reference Trajectory as a second worked example to imitate (how search keywords were composed, how the candidate was picked, the option-selection order, when Buy Now was pressed). The Key Tip distils the transferable lesson.\n"
-        "  • **[Skill Patch N]** — a short supplementary patch adding extra advice ON TOP of the Base. Apply a patch only if its 'When to apply' condition matches your current task; otherwise ignore that patch (but still follow the Base).\n"
-        "  • **[Failure Record / ⛔]** — a warning about a trap. NEVER execute its procedure; use it only to AVOID the described trap.\n\n"
+        "  • **[Base Skill]** — a worked example trajectory from a SUCCESSFUL past shopping episode. **This Base Skill ALWAYS applies to your current task.** Its Trigger label is just an index/category tag, NOT a gating condition. You MUST treat it as a second ICL example and imitate its reasoning pattern (how it composed search keywords, how it picked the candidate from results, the order in which it clicked options, when it pressed Buy Now).\n"
+        "  • **[Skill Delta N]** — a short supplementary patch that adds extra advice ON TOP of the Base. Apply a patch only if its Trigger condition literally matches your current task; otherwise ignore that specific patch (but you still apply the Base).\n"
+        "  • **[Failure Record / ⛔]** — a warning about a trap. NEVER execute its procedure; use it only to AVOID the trap it describes.\n\n"
         "### How to actually use it (mandatory)\n"
-        "  STEP A — Before your first Action, your **Thought MUST contain one sentence stating how you adapt the Base Skill's pattern to your current task.** E.g.: \"Following the Base Skill, I'll compose a search query combining product type + most discriminating attribute + price ceiling.\"\n"
-        "  STEP B — Write `Action: search[...]` using YOUR task's product/attributes/price, NOT the Base's literal values.\n"
-        "  STEP C — On the item page, follow the SAME option-selection order shown in the Base's Reference Trajectory, but click YOUR task's values.\n"
-        "  STEP D — If any Patch's 'When to apply' matches your task, weave its advice into Steps B–C.\n\n"
-        "Anti-pattern: writing a Thought that only lists your task's attributes without referencing the Base Skill means you ignored the memory and will likely fail."
+        "  STEP A — Before your first Action, your **Thought MUST contain one sentence stating how you are adapting the Base Skill's pattern to your current task.** For example: \"Following the Base Skill, I will compose a search query that combines my current task's product type + most discriminating attribute + price ceiling, then click the first candidate matching all attributes.\"\n"
+        "  STEP B — Then write `Action: search[...]` using YOUR current task's product/attributes/price, NOT the Base Skill's literal values.\n"
+        "  STEP C — On the item page, follow the SAME option-selection order observed in the Base Skill (color → size → quantity → Buy Now, or whatever the Base's last few Actions show), but click YOUR current task's values.\n"
+        "  STEP D — If any Patch's Trigger literally matches your task, weave its specific advice into Steps B-C. Do NOT blend irrelevant patches.\n\n"
+        "Anti-pattern (do NOT do this): writing a Thought that only lists your current task's attributes and never references the Base Skill — that means you ignored the memory and you will likely fail."
     ),
     "synapse": (
         "The following past web-shopping trajectories are retrieved from memory as few-shot examples. "
@@ -102,26 +102,35 @@ MEMORY_HEADERS: dict = {
 
 TaskTree_Prompt_Map: dict = {}
 
-TaskTree_Prompt_Map['root_success'] = """You are writing a Key Tip for a successful WebShop trajectory. The trajectory itself is already saved separately — you only need to write the abstract guidance.
+TaskTree_Prompt_Map['root_success'] = """You are saving a SUCCESSFUL WebShop trajectory as a reference example for future agents — like a curated 1-shot ICL exemplar, NOT an abstract instruction manual.
 
 Product Category: {env_description}
 Task: {task_description}
 Result: SUCCESS ({steps}/{max_steps} steps)
 
-=== TRAJECTORY ===
+=== RAW TRAJECTORY ===
 {trajectory}
 === END ===
 
-Write a Key Tip (1–2 sentences, ≤ 40 words) capturing the most transferable lesson from this trajectory:
-- What search/selection strategy made this succeed?
-- What generalizable decision pattern should future agents remember?
-- Do NOT repeat task-specific values (exact product names, prices, colors).
+### Your job
+Clean and condense the raw trajectory above into a SHORT illustrative dialog that a future agent can read and IMITATE. Keep the Observation → Thought → Action format so it looks just like the ICL example the agent already sees.
 
-Output ONLY the JSON:
+### Rules for the cleaned trajectory
+- KEEP every Action that actually contributed to the success (search composition, candidate click, option selections, Buy Now). DROP failed/backtracked attempts.
+- For each kept Observation, TRIM noise but preserve the lines that justify the next Action (e.g., visible options, the product id, the price tag). One Observation block ≤ 60 words.
+- Add a brief Thought before each Action explaining WHY (≤ 25 words), so the agent learns the reasoning pattern.
+- Output the cleaned trajectory as plain text (NOT JSON inside): each turn on its own line, prefixed with `Observation:`, `Thought:`, or `Action:`. End the cleaned trajectory after the successful `Action: click[Buy Now]`.
+
+### Output JSON shape
+- `activation_condition`: Short noun phrase naming when this exemplar is relevant. Be specific to the product category but not to the exact constraints. E.g. "shopping for men's t-shirts/tanks with color+size+price constraints". 1 sentence, ≤ 30 words.
+- `execution_procedure`: The cleaned trajectory text described above. This is the MAIN content. Multi-line, plain text, Obs/Thought/Action format.
+- `termination_condition`: "After Action: click[Buy Now] succeeds with full reward." (or similar, 1 line)
+
+Output ONLY the JSON (NOTE: the cleaned trajectory in `execution_procedure` MUST escape newlines as \\n):
 {{
-    "activation_condition": "Short phrase describing what product category / task type this skill applies to. ≤ 30 words. Specific to category but NOT to exact constraints.",
-    "execution_procedure": "Key Tip: ...",
-    "termination_condition": "After Action: click[Buy Now] succeeds with full reward."
+    "activation_condition": "...",
+    "execution_procedure": "Observation: ... \\nThought: ... \\nAction: search[...] \\nObservation: ... \\nThought: ... \\nAction: click[...] \\n... \\nAction: click[Buy Now]",
+    "termination_condition": "..."
 }}
 """
 
@@ -147,9 +156,9 @@ Output ONLY the JSON:
 }}
 """
 
-TaskTree_Prompt_Map['node_success'] = """You are writing a **Skill Patch** that supplements an existing Base Skill — NOT another standalone trajectory or procedure.
+TaskTree_Prompt_Map['node_success'] = """You are writing a **Skill Patch** that supplements an existing Base Skill — NOT another standalone procedure.
 
-=== EXISTING SKILL CHAIN (Base trajectory + Key Tip + previous patches) ===
+=== EXISTING SKILL CHAIN (Base + previous patches) ===
 {retrieved_task_memory}
 === END ===
 
@@ -160,36 +169,36 @@ Result: SUCCESS ({steps}/{max_steps} steps)
 {trajectory}
 
 ### Your job
-Compare this new trajectory against the Base trajectory shown above. Decide whether it reveals a **new tactic, special case, or caveat** not already covered. Examples of valid patches:
-- A new search-keyword trick for this product sub-category (e.g. "for perfumes, include the fluid-ounce number verbatim").
-- A different option-selection order required by this sub-category.
-- A constraint prioritization rule when results are sparse.
-- A deviation from the base trajectory that was necessary here, with an explanation.
+Look at the trajectory. Decide whether it reveals a **new tactic or special-case observation** that the base skill above does NOT already cover. Examples of valid patches:
+- A new search-keyword trick specific to this product sub-category (e.g. "for perfumes, include the fluid-ounce number in the search query verbatim").
+- A new option-selection ordering required by this sub-category (e.g. "for shoes, click 'size' label BEFORE color, because color options re-render after size pick").
+- A common failure mode for this sub-category and how to avoid it.
+- A clarification of which constraint to prioritize when results are sparse.
 
 ### Rules for writing the patch
-- **DO NOT** reproduce the base trajectory. Assume the reader already has it.
-- Write ONLY what is *different / additional / clarifying* relative to the base trajectory + key tip.
-- ≤80 words total in execution_procedure.
-- `activation_condition`: name the SPECIFIC trigger condition for this patch.
-- `execution_procedure`: start with "In addition to the base:" or "Replace base step X with:".
-- `termination_condition`: leave empty unless the patch changes the stop condition.
+- **DO NOT** restate the base procedure. Assume the reader already follows the base skill.
+- Write ONLY what is *different / additional / clarifying* for this sub-category.
+- 1-4 short bullets is ideal; ≤80 words total in execution_procedure.
+- `activation_condition` must name the SPECIFIC trigger ("when shopping for {env_description} AND the task includes a numeric fluid-ounce constraint"); not generic "WebShop tasks where...".
+- `execution_procedure` starts with words like "In addition to the base:" or "Replace base step N with:"; never "1. Compose a search...".
+- `termination_condition`: leave empty unless the patch genuinely changes when to stop.
 
 ### Skip rule
-Output `{{"skip": true}}` ONLY if this trajectory follows the base trajectory exactly, with no new tactics or deviations worth noting.
+Output `{{"skip": true}}` ONLY if the trajectory shows nothing the base skill doesn't already make obvious. Be honest — if every search/click in this trajectory could be predicted from the base skill alone, skip.
 
 Output ONLY one of these two JSON formats:
 {{"skip": true}}
 OR
 {{
-    "activation_condition": "When [specific sub-category / constraint combo]...",
-    "execution_procedure": "In addition to the base: ...",
+    "activation_condition": "When [specific sub-category / constraint combo] applies on top of the base skill...",
+    "execution_procedure": "In addition to the base: <patch bullets>",
     "termination_condition": ""
 }}
 """
 
-TaskTree_Prompt_Map['node_failure'] = """You are recording a **Failure Patch** — a warning that supplements the existing Base Skill (trajectory + tip), not a standalone failure log.
+TaskTree_Prompt_Map['node_failure'] = """You are recording a **Failure Patch** — a warning that supplements the existing Base Skill, not a standalone failure log.
 
-=== EXISTING SKILL CHAIN (Base trajectory + Key Tip + previous patches/warnings) ===
+=== EXISTING SKILL CHAIN (Base + previous patches/warnings) ===
 {retrieved_task_memory}
 === END ===
 
