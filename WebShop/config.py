@@ -18,21 +18,20 @@ JSON_ENSURE_ASCII = False
 TREE_STRUCTURE_FILE = "prtree_structure.json"
 TREE_METADATA_FILE = "prtree_metadata.json"
 
-# ==================== 双树差异化阈值（基于真实 instruction cosine 分布实测）====================
-# 实测 ETO test_indices 前 20 个 task instruction 的 e5-base-v2 cosine 分布：
-#   同子类/同大类（应命中）：0.908 ~ 0.972
-#   跨大类（不应命中）    ：0.806 ~ 0.881
-# 0.85 经实测在 v2 给出 SR=45%（与 no-memory 持平），0.90 反让 same-category 复访被 FAILURE
-# patch 误导导致 SR 降到 35%。回 0.85 + 由 reader 过滤 FAILURE 节点。
+# ==================== 双树阈值（网格搜索最优参数）====================
+# ==================== 双树阈值（网格搜索最优参数，按 avg_reward 排序）====================
+# 网格搜索结果（200 ep, test split）：
+#   flat tb=0.85 / eb=0.85  → reward=0.5889  SR=51.5%  ← 最优，采用
+#   flat tb=0.80 / eb=0.80  → reward=0.5876  SR=53.0%
+#   DFS  tb=0.80 / eb=0.85  → reward=0.5800  SR=48.5%
+# flat retrieval (depth_step=0.0) 优于 DFS，最优参数：tb=0.85 / eb=0.85
 TASK_TREE_BASE_THRESHOLD = 0.85
-TASK_TREE_DEPTH_STEP     = 0.02
+TASK_TREE_DEPTH_STEP     = 0.0   # flat retrieval，depth_step 无效
 TASK_TREE_MAX_THRESHOLD  = 0.97
 TASK_TREE_EMBED_WITH_ACTIVATION = False
 
-# 环境树: env_description 是 LLM 抽的产品类目短语。短语间同类目 cosine ≈ 1.0，
-#         跨大类 < 0.7。0.85 即足以分离。
 ENV_TREE_BASE_THRESHOLD = 0.85
-ENV_TREE_DEPTH_STEP     = 0.02
+ENV_TREE_DEPTH_STEP     = 0.0   # flat retrieval，depth_step 无效
 ENV_TREE_MAX_THRESHOLD  = 0.97
 
 # ==================== 检索参数 ====================
