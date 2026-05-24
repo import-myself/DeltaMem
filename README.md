@@ -8,7 +8,6 @@
 |-----------|-----------|
 | ALFWorld  | `ALFWorld/` |
 | ScienceWorld | `ScienceWorld/` |
-| Mind2Web  | `Mind2web/` |
 | WebShop   | `WebShop/` |
 
 ## Project Structure
@@ -19,7 +18,7 @@ memory/          # Core PR-Tree memory implementation
 common/          # Shared utilities (LLM client, retriever)
 ALFWorld/        # ALFWorld agent and prompts
 ScienceWorld/    # ScienceWorld agent and prompts
-Mind2web/        # Mind2Web agent and prompts
+Mind2web/        # (not included)
 WebShop/         # WebShop agent and prompts
 ablation/        # Ablation scripts and parameter sensitivity analysis
 embedding/       # Sentence embedding model (e5-base-v2)

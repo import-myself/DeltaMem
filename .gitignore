@@ -11,11 +11,7 @@ ALFWorld/logs/
 ALFWorld/storage/
 ALFWorld/trajectories/
 embedding/e5-base-v2
-Mind2web/data/
-Mind2web/test_task
-Mind2web/test_domain
-Mind2web/test_website
-Mind2web/*_results.json
+Mind2web/
 ScienceWorld/dev/
 ScienceWorld/test/
 trajectories/
@@ -44,9 +40,8 @@ WebShop/search_engine/indexes*/
 WebShop/search_engine/resources*/
 WebShop/env_setup/
 
-# ScienceWorld / Mind2web shell scripts with API keys
+# ScienceWorld shell scripts with API keys
 ScienceWorld/*.sh
-Mind2web/*.sh
 
 api.md
 additional_experiments.md
