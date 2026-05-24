@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent))  # PRTree root for synapse_memory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # PRTree root for synapse_memory
 from agent_alfworld_dual import DualTreeReflectiveAgent
 from common.llm_client import create_llm_client
 from common.trajectory_logger import TrajectoryLogger
@@ -143,7 +143,8 @@ def run_online_evaluation(args):
     agent = DualTreeReflectiveAgent(
         agent_name="DualTreeOnlineAgent",
         llm_client=llm_client,
-        icl_num=args.icl_num
+        icl_num=args.icl_num,
+        icl_data_path=str(Path(__file__).resolve().parent / "data/alfworld_icl.json"),
     )
 
     # ---- Memory backend selection ----

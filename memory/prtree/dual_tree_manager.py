@@ -234,19 +234,30 @@ class DualTreeMemory:
     env_tree:  环境描述索引 → 声明性知识（在哪找/怎么操作）
     """
 
-    def __init__(self, retriever: VectorRetriever):
+    def __init__(
+        self,
+        retriever: VectorRetriever,
+        task_base_threshold: Optional[float] = None,
+        env_base_threshold: Optional[float] = None,
+        consolidation_threshold: Optional[int] = None,
+    ):
         self.retriever = retriever
+        self.consolidation_threshold = consolidation_threshold if consolidation_threshold is not None else CONSOLIDATION_THRESHOLD
+        self.consolidation_count = 0  # 固化触发次数（用于参数敏感性分析）
+
+        _tb = task_base_threshold if task_base_threshold is not None else TASK_TREE_BASE_THRESHOLD
+        _eb = env_base_threshold if env_base_threshold is not None else ENV_TREE_BASE_THRESHOLD
 
         self.task_tree = PRTreeMemory(
             retriever, tree_name="task",
-            base_threshold=TASK_TREE_BASE_THRESHOLD,
+            base_threshold=_tb,
             depth_step=TASK_TREE_DEPTH_STEP,
             max_threshold=TASK_TREE_MAX_THRESHOLD,
             embed_with_activation=TASK_TREE_EMBED_WITH_ACTIVATION,
         )
         self.env_tree = PRTreeMemory(
             retriever, tree_name="env",
-            base_threshold=ENV_TREE_BASE_THRESHOLD,
+            base_threshold=_eb,
             depth_step=ENV_TREE_DEPTH_STEP,
             max_threshold=ENV_TREE_MAX_THRESHOLD,
             embed_with_activation=False,
@@ -354,8 +365,9 @@ class DualTreeMemory:
     def trigger_consolidation_check(self, node: MemoryNode, llm_client=None, tree_type: str = "task") -> None:
         if node.meta.get("is_consolidated", False):
             return
-        if node.meta.get("success_count", 0) < CONSOLIDATION_THRESHOLD:
+        if node.meta.get("success_count", 0) < self.consolidation_threshold:
             return
+        self.consolidation_count += 1
 
         logger.info(f"[Consolidation/{tree_type}] Node {node.node_id[:8]} hit success_count={node.meta['success_count']} — compiling...")
 

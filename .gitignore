@@ -14,9 +14,35 @@ Mind2web/data/
 Mind2web/test_task
 Mind2web/test_domain
 Mind2web/test_website
+Mind2web/*_results.json
 ScienceWorld/dev/
 ScienceWorld/test/
 trajectories/
 results/
-update.md 
+update.md
 Paper/
+ACL/
+.claude/
+
+# ablation: shell scripts contain API keys; large runtime dirs excluded
+ablation/**/*.sh
+ablation/logs/
+ablation/results/
+ablation/trajectories/
+ablation/param_sensitivity/results/
+ablation/param_sensitivity/trajectories/
+
+# WebShop: runtime environment and large index files
+WebShop/data/
+WebShop/logs/
+WebShop/storage/
+WebShop/trajectories/
+WebShop/results/
+WebShop/web_agent_site/
+WebShop/search_engine/indexes*/
+WebShop/search_engine/resources*/
+WebShop/env_setup/
+
+# ScienceWorld / Mind2web shell scripts with API keys
+ScienceWorld/*.sh
+Mind2web/*.sh

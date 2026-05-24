@@ -90,7 +90,10 @@ class DualTreeReflectiveAgent:
         agent_name: str,
         llm_client: LLMClient,
         icl_num: int = 1,
-        icl_data_path: str = "data/alfworld_icl.json"
+        icl_data_path: str = "data/alfworld_icl.json",
+        task_base_threshold: Optional[float] = None,
+        env_base_threshold: Optional[float] = None,
+        consolidation_threshold: Optional[int] = None,
     ):
         self.agent_name = agent_name
         self.llm_client = llm_client
@@ -98,7 +101,12 @@ class DualTreeReflectiveAgent:
 
         # --- 初始化双树记忆系统 ---
         self.retriever = VectorRetriever()
-        self.dual_memory = DualTreeMemory(self.retriever)
+        self.dual_memory = DualTreeMemory(
+            self.retriever,
+            task_base_threshold=task_base_threshold,
+            env_base_threshold=env_base_threshold,
+            consolidation_threshold=consolidation_threshold,
+        )
         self.reader = DualMemoryReader(self.dual_memory)
         self.writer = DualMemoryWriter(self.dual_memory)
 

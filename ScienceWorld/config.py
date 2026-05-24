@@ -24,14 +24,14 @@ SIMILARITY_THRESHOLD_RESIDUAL = 0.85
 
 # ==================== 双树差异化阈值配置 ====================
 # 任务树: 任务目标描述较短且语义集中
-TASK_TREE_BASE_THRESHOLD = 0.75
-TASK_TREE_DEPTH_STEP = 0.01
+TASK_TREE_BASE_THRESHOLD = 0.84   # 网格搜索最优 (dev sr=0.6907, reward=0.8498)
+TASK_TREE_DEPTH_STEP = 0.0
 TASK_TREE_MAX_THRESHOLD = 0.95
 TASK_TREE_EMBED_WITH_ACTIVATION = False
 
 # 环境树: ScienceWorld 场景描述较长，需要较高阈值精确匹配
-ENV_TREE_BASE_THRESHOLD = 0.85
-ENV_TREE_DEPTH_STEP = 0.02
+ENV_TREE_BASE_THRESHOLD = 0.86   # 网格搜索最优 (dev sr=0.6907, reward=0.8498)
+ENV_TREE_DEPTH_STEP = 0.0
 ENV_TREE_MAX_THRESHOLD = 0.99
 
 # ==================== 检索参数 ====================

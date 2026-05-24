@@ -118,13 +118,17 @@ def _run_alfworld(args_main, method: str, phase: str) -> None:
     traj_base  = args_main.traj_dir or "trajectories/train_to_test"
     eval_split = args_main.alfworld_eval_split
 
+    # deltamem 在 runner 里注册为 "prtree"
+    _MEM_ALIAS = {"deltamem": "prtree", "no_memory": "no-memory"}
+    _mem_backend = _MEM_ALIAS.get(method, method)
+
     def _make_alf_args(split: str, freeze: bool, resume: bool) -> types.SimpleNamespace:
         return _make_args(
             split=split,
             model=args_main.model,
             icl_num=args_main.icl_num,
             max_steps=args_main.max_steps,
-            memory=method if method != "no_memory" else "no-memory",
+            memory=_mem_backend,
             memory_path=mem_path if method not in ("no_memory",) else None,
             memory_file=None,
             save_memory=None,
@@ -153,8 +157,10 @@ def _run_alfworld(args_main, method: str, phase: str) -> None:
         append_to_csv(output_csv, row)
 
     if phase in ("eval", "all"):
-        logger.info(f"[ALFWorld/{method}] Phase: EVAL on {eval_split} (frozen)")
-        run_args = _make_alf_args(split=eval_split, freeze=True, resume=True)
+        freeze_eval = not getattr(args_main, "no_freeze_eval", False)
+        label = "frozen" if freeze_eval else "unfrozen"
+        logger.info(f"[ALFWorld/{method}] Phase: EVAL on {eval_split} ({label})")
+        run_args = _make_alf_args(split=eval_split, freeze=freeze_eval, resume=True)
         mod.run_online_evaluation(run_args)
         row = {
             "benchmark": "alfworld", "method": method, "phase": "eval",
@@ -185,6 +191,10 @@ def _run_sciworld(args_main, method: str, phase: str) -> None:
     traj_base  = args_main.traj_dir or "trajectories/train_to_test"
     eval_split = args_main.sciworld_eval_split
 
+    # deltamem 在 runner 里注册为 "prtree"
+    _MEM_ALIAS = {"deltamem": "prtree", "no_memory": "no-memory"}
+    _mem_backend = _MEM_ALIAS.get(method, method)
+
     def _make_sci_args(split: str, freeze: bool, resume: bool) -> types.SimpleNamespace:
         return _make_args(
             split=split,
@@ -192,7 +202,7 @@ def _run_sciworld(args_main, method: str, phase: str) -> None:
             icl_num=args_main.icl_num,
             icl_path=str(_SCIWORLD / "data/sciworld_icl.json"),
             max_episodes=args_main.max_episodes or 10000,
-            memory=method if method != "no_memory" else "no-memory",
+            memory=_mem_backend,
             memory_path=mem_path if method not in ("no_memory",) else None,
             memory_file=None,
             save_memory=None,
@@ -221,8 +231,10 @@ def _run_sciworld(args_main, method: str, phase: str) -> None:
         append_to_csv(output_csv, row)
 
     if phase in ("eval", "all"):
-        logger.info(f"[SciWorld/{method}] Phase: EVAL on {eval_split} (frozen)")
-        run_args = _make_sci_args(split=eval_split, freeze=True, resume=True)
+        freeze_eval = not getattr(args_main, "no_freeze_eval", False)
+        label = "frozen" if freeze_eval else "unfrozen"
+        logger.info(f"[SciWorld/{method}] Phase: EVAL on {eval_split} ({label})")
+        run_args = _make_sci_args(split=eval_split, freeze=freeze_eval, resume=True)
         mod.run_online_evaluation(run_args)
         row = {
             "benchmark": "sciworld", "method": method, "phase": "eval",
@@ -273,6 +285,8 @@ def main():
     p.add_argument("--memory-path", type=str, default=None,
                    help="所有方法共用的记忆存储路径（build 写入，eval 读出冻结）")
 
+    p.add_argument("--no-freeze-eval", action="store_true",
+                   help="eval 阶段不冻结记忆库（允许写入），默认冻结")
     p.add_argument("--alfworld-eval-split",
                    choices=["eval_in_distribution", "eval_out_of_distribution"],
                    default="eval_in_distribution")

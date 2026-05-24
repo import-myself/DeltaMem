@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 # PRTree root → synapse_memory.py
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
 from agent_sciworld_dual import DualTreeSciWorldAgent
 from common.llm_client import create_llm_client
@@ -39,9 +41,9 @@ logger = logging.getLogger(__name__)
 def load_task_indices(split: str):
     """加载任务索引列表，返回 [(task_name, variation_idx), ...]"""
     split_file = {
-        "train": "data/sciworld/train_indices.json",
-        "dev":   "data/sciworld/dev_indices.json",
-        "test":  "data/sciworld/test_indices.json",
+        "train": _SCRIPT_DIR / "data/sciworld/train_indices.json",
+        "dev":   _SCRIPT_DIR / "data/sciworld/dev_indices.json",
+        "test":  _SCRIPT_DIR / "data/sciworld/test_indices.json",
     }
     if split not in split_file:
         raise ValueError(f"Unknown split: {split}. Choose from train/dev/test.")
@@ -161,6 +163,8 @@ def run_online_evaluation(args):
         llm_client=llm_client,
         icl_num=args.icl_num,
         icl_data_path=args.icl_path,
+        max_steps_path=str(_SCRIPT_DIR / "data/sciworld/max_steps.json"),
+        taskname2id_path=str(_SCRIPT_DIR / "data/sciworld/taskname2id.json"),
     )
 
     # ---- Memory backend selection ----
