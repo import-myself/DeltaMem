@@ -3,6 +3,7 @@ __pycache__/
 logs/
 data/
 storage/
+api.md
 ALFWorld/data/
 ALFWorld/eval_in_distribution/
 ALFWorld/eval_out_of_distribution/
@@ -46,3 +47,6 @@ WebShop/env_setup/
 # ScienceWorld / Mind2web shell scripts with API keys
 ScienceWorld/*.sh
 Mind2web/*.sh
+
+api.md
+additional_experiments.md
