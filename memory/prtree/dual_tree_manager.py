@@ -1,44 +1,36 @@
 """
-Dual PR-Tree Memory Manager (v4.0)
+Dual PR-Tree Memory Manager
 双树管理器：将经验分别组织为「任务树」和「环境树」
 
-设计理念:
-- ALFWorld 的每个任务包含两个维度的信息：
-  1. 任务维度 (Task): "put some spraybottle on toilet" → 偏向 Workflow / 策略
-  2. 环境维度 (Environment): "You are in the middle of a room. Looking quickly around you, you see a cabinet 4..." → 偏向环境布局认知 / 物品位置经验
-- 原始单树将两者混合，导致检索不精确。
-- 双树将两个维度分别组织，检索时分别匹配，最终融合为一个完整的记忆上下文。
-
-架构:
-  TaskTree:   以任务目标为索引，存储 Workflow Schema / 策略残差
-  EnvTree:    以环境描述为索引，存储 环境反思 / 物品位置经验 / 环境交互教训
+TaskTree: 以任务目标为索引，存储程序性 Skill（怎么做）
+EnvTree:  以环境描述为索引，存储声明性知识（环境布局、物品位置、交互规则）
 """
 
 import json
 import logging
 import time
+from collections import deque
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Union
 import numpy as np
 
 from config import (
-    STORAGE_PATH, MAX_DEPTH,
-    TREE_STRUCTURE_FILE, JSON_INDENT, JSON_ENSURE_ASCII,
+    MAX_DEPTH,
+    JSON_INDENT, JSON_ENSURE_ASCII,
     TASK_TREE_BASE_THRESHOLD, TASK_TREE_DEPTH_STEP, TASK_TREE_MAX_THRESHOLD,
-    ENV_TREE_BASE_THRESHOLD, ENV_TREE_DEPTH_STEP, ENV_TREE_MAX_THRESHOLD
+    TASK_TREE_EMBED_WITH_ACTIVATION,
+    ENV_TREE_BASE_THRESHOLD, ENV_TREE_DEPTH_STEP, ENV_TREE_MAX_THRESHOLD,
+    CONSOLIDATION_THRESHOLD, FAILURE_NODE_PENALTY,
 )
 from .memory_node import MemoryNode, NodeType, ResultStatus
+from .consolidation import SkillCompiler, KnowledgeCompiler
 from common.retriever import VectorRetriever
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class PRTreeMemory:
-    """
-    单棵 PR-Tree (与原始 tree_manager 逻辑一致)
-    保留为内部组件，供 DualTreeMemory 使用
-    """
+    """单棵 PR-Tree — DualTreeMemory 的内部组件"""
 
     def __init__(
         self,
@@ -46,125 +38,151 @@ class PRTreeMemory:
         tree_name: str = "default",
         base_threshold: float = 0.88,
         depth_step: float = 0.02,
-        max_threshold: float = 0.99
+        max_threshold: float = 0.99,
+        embed_with_activation: bool = False,
     ):
         self.retriever = retriever
         self.tree_name = tree_name
-
-        # 阈值参数 (每棵树可独立配置)
         self.base_threshold = base_threshold
         self.depth_step = depth_step
         self.max_threshold = max_threshold
+        self.embed_with_activation = embed_with_activation
 
-        # 初始化虚拟根
         self.root = MemoryNode(
             node_type=NodeType.ROOT,
             result_status=ResultStatus.SUCCESS,
             embedding=np.zeros(self.retriever.embedding_dim),
             scenario_description=f"GLOBAL_ROOT_PLACEHOLDER_{tree_name.upper()}",
-            memory_description=f"The absolute root of the {tree_name} tree.",
-            content_body=f"Base schema for all {tree_name} entries."
         )
-
         self.node_index: Dict[str, MemoryNode] = {self.root.node_id: self.root}
         self.stats = {"total_nodes": 1, "max_depth": 0}
 
-    # --- 动态阈值 (使用实例级参数) ---
-    def _get_dynamic_threshold(self, current_depth: int) -> float:
-        """
-        根据当前深度计算相似度阈值
-        阈值参数由构造时传入，任务树和环境树各自独立
-        
-        TaskTree (宽松): base=0.80, step=0.02 → Depth 0: 0.80, 1: 0.82, 2: 0.84 ...
-        EnvTree  (严格): base=0.88, step=0.02 → Depth 0: 0.88, 1: 0.90, 2: 0.92 ...
-        """
-        threshold = self.base_threshold + (current_depth * self.depth_step)
-        return min(threshold, self.max_threshold)
+    def get_last_episode_idx(self) -> int:
+        max_idx = -1
+        for node in self.node_index.values():
+            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
+                continue
+            max_idx = max(max_idx, node.meta.get("episode_idx", -1))
+        return max_idx
 
-    # --- DFS 检索 ---
+    def _get_dynamic_threshold(self, depth: int) -> float:
+        return min(self.base_threshold + depth * self.depth_step, self.max_threshold)
+
+    # ------------------------------------------------------------------
+    # 检索
+    # ------------------------------------------------------------------
+
     def retrieve_context_path(self, query_text: str) -> List[MemoryNode]:
         query_emb = self.retriever.encode(query_text)
-        current_node = self.root
-        path = [current_node]
+        current = self.root
+        path = [current]
 
-        while True:
-            current_depth = len(path) - 1
-            if current_depth >= MAX_DEPTH:
-                break
-
-            children = current_node.children
-            if not children:
-                break
-
-            threshold = self._get_dynamic_threshold(current_depth)
-            best_child_tuple = self.retriever.retrieve_best_match(
-                query_emb, children, threshold=threshold
+        while len(path) - 1 < MAX_DEPTH and current.children:
+            threshold = self._get_dynamic_threshold(len(path) - 1)
+            match = self.retriever.retrieve_best_match(
+                query_emb, current.children,
+                threshold=threshold,
+                failure_penalty=FAILURE_NODE_PENALTY,
             )
-
-            if best_child_tuple:
-                best_child, score = best_child_tuple
-                path.append(best_child)
-                current_node = best_child
+            if match:
+                current = match[0]
+                path.append(current)
             else:
                 break
 
         return path
 
-    # --- 写入 ---
-    def add_experience_node(
+    def retrieve_context_path_flat(self, query_text: str) -> List[MemoryNode]:
+        """全局平铺检索：跨越层级在整棵树中找最相似节点，返回其完整祖先路径。
+        避免层级阈值导致深层好节点因父节点相似度不足而被截断。
+        """
+        query_emb = self.retriever.encode(query_text)
+
+        # BFS 收集全树所有非根节点
+        all_nodes: List[MemoryNode] = []
+        queue = deque(self.root.children)
+        while queue:
+            node = queue.popleft()
+            all_nodes.append(node)
+            queue.extend(node.children)
+
+        if not all_nodes:
+            return [self.root]
+
+        # 全局 top-1，使用 base_threshold（不按层级递增），保留 failure_penalty
+        match = self.retriever.retrieve_best_match(
+            query_emb, all_nodes,
+            threshold=self.base_threshold,
+            failure_penalty=FAILURE_NODE_PENALTY,
+        )
+
+        if match is None:
+            return [self.root]
+
+        # 沿 parent 链回溯到根，得到完整路径 [root → ... → best_node]
+        return match[0].get_path_to_root()
+
+    # ------------------------------------------------------------------
+    # 写入（直接接受 skill dict）
+    # ------------------------------------------------------------------
+
+    def _new_node(
         self,
-        anchor_node: MemoryNode,
+        parent: MemoryNode,
         scenario_description: str,
-        memory_description: str,
-        content_body: str,
+        skill: Dict[str, Any],
         result_status: Union[str, ResultStatus],
-        force_sibling: bool = False
+        node_type: NodeType = NodeType.RESIDUAL,
     ) -> MemoryNode:
-        parent_node = anchor_node
-
-        if (anchor_node.depth >= MAX_DEPTH or force_sibling) and anchor_node.parent:
-            parent_node = anchor_node.parent
-
-        embedding = self.retriever.encode(scenario_description)
-
-        new_node = MemoryNode(
-            node_type=NodeType.RESIDUAL,
+        if self.embed_with_activation:
+            embed_text = skill.get("activation_condition") or scenario_description
+        else:
+            embed_text = scenario_description
+        embedding = self.retriever.encode(embed_text)
+        node = MemoryNode(
+            node_type=node_type,
             result_status=result_status,
             embedding=embedding,
             scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            parent=parent_node
+            parent=parent,
         )
-
-        self.node_index[new_node.node_id] = new_node
+        node.payload["activation_condition"] = skill.get("activation_condition", "")
+        node.payload["trajectory"] = skill.get("trajectory")
+        node.payload["execution_procedure"] = skill.get("execution_procedure", "")
+        node.payload["termination_condition"] = skill.get("termination_condition", "")
+        self.node_index[node.node_id] = node
         self.stats["total_nodes"] += 1
-        self.stats["max_depth"] = max(self.stats["max_depth"], new_node.depth)
-        return new_node
-
-    def add_root_schema(
-        self,
-        scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        result_status: str = ResultStatus.SUCCESS
-    ) -> MemoryNode:
-        node = self.add_experience_node(
-            anchor_node=self.root,
-            scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=result_status
-        )
-        node.meta["node_type"] = NodeType.ROOT.value
+        self.stats["max_depth"] = max(self.stats["max_depth"], node.depth)
         return node
 
-    # --- 持久化 ---
-    def save_tree(self, filepath: str) -> None:
-        nodes_list = []
-        queue = [self.root]
-        visited = {self.root.node_id}
+    def add_root_skill(
+        self,
+        scenario_description: str,
+        skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus] = ResultStatus.SUCCESS,
+    ) -> MemoryNode:
+        node = self._new_node(self.root, scenario_description, skill, result_status, NodeType.ROOT)
+        return node
 
+    def add_residual_skill(
+        self,
+        anchor_node: MemoryNode,
+        scenario_description: str,
+        skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus],
+        force_sibling: bool = False,
+    ) -> MemoryNode:
+        parent = anchor_node
+        if (anchor_node.depth >= MAX_DEPTH or force_sibling) and anchor_node.parent:
+            parent = anchor_node.parent
+        return self._new_node(parent, scenario_description, skill, result_status, NodeType.RESIDUAL)
+
+    # ------------------------------------------------------------------
+    # 持久化
+    # ------------------------------------------------------------------
+
+    def save_tree(self, filepath: str) -> None:
+        nodes_list, queue, visited = [], [self.root], {self.root.node_id}
         while queue:
             curr = queue.pop(0)
             nodes_list.append(curr.to_dict())
@@ -173,252 +191,220 @@ class PRTreeMemory:
                     visited.add(child.node_id)
                     queue.append(child)
 
-        data = {
-            "meta": {
-                "tree_name": self.tree_name,
-                "timestamp": int(time.time()),
-                "stats": self.stats
-            },
-            "nodes": nodes_list
-        }
-
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=JSON_INDENT, ensure_ascii=JSON_ENSURE_ASCII)
-        logger.info(f"[{self.tree_name}] Tree saved to {filepath} ({len(nodes_list)} nodes)")
+            json.dump(
+                {"meta": {"tree_name": self.tree_name, "timestamp": int(time.time()), "stats": self.stats},
+                 "nodes": nodes_list},
+                f, indent=JSON_INDENT, ensure_ascii=JSON_ENSURE_ASCII,
+            )
+        logger.info(f"[{self.tree_name}] Saved {len(nodes_list)} nodes → {filepath}")
 
     def load_tree(self, filepath: str) -> None:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-
-            nodes_data = data.get("nodes", [])
             self.stats = data.get("meta", {}).get("stats", self.stats)
-
-            temp_index = {}
-            for n_data in nodes_data:
-                node = MemoryNode.from_dict(n_data)
-                temp_index[node.node_id] = node
-
+            temp = {n["node_id"]: MemoryNode.from_dict(n) for n in data.get("nodes", [])}
             root_found = None
-            for n_data in nodes_data:
-                curr_node = temp_index[n_data["node_id"]]
-                parent_id = n_data.get("parent_id")
-
-                if parent_id and parent_id in temp_index:
-                    parent_node = temp_index[parent_id]
-                    parent_node.add_child(curr_node)
-
-                if parent_id is None:
-                    root_found = curr_node
-
+            for n_data in data.get("nodes", []):
+                node = temp[n_data["node_id"]]
+                pid = n_data.get("parent_id")
+                if pid and pid in temp:
+                    temp[pid].add_child(node)
+                if pid is None:
+                    root_found = node
             if root_found:
                 self.root = root_found
-                self.node_index = temp_index
-                logger.info(f"[{self.tree_name}] Tree loaded. Total nodes: {len(self.node_index)}")
+                self.node_index = temp
+                logger.info(f"[{self.tree_name}] Loaded {len(temp)} nodes from {filepath}")
             else:
-                logger.warning(f"[{self.tree_name}] No root found after loading.")
-
+                logger.warning(f"[{self.tree_name}] No root found in {filepath}")
         except FileNotFoundError:
-            logger.warning(f"[{self.tree_name}] Tree file not found: {filepath}")
+            logger.warning(f"[{self.tree_name}] File not found: {filepath}")
         except Exception as e:
-            logger.error(f"[{self.tree_name}] Failed to load tree: {e}")
+            logger.error(f"[{self.tree_name}] Load failed: {e}")
 
 
 class DualTreeMemory:
     """
-    双树记忆管理器
-    
-    管理两棵独立的 PR-Tree:
-    - task_tree: 以任务目标为索引 (e.g. "put some spraybottle on toilet")
-      存储内容: Workflow Schema, 策略残差, 任务完成步骤总结
-    - env_tree:  以环境描述为索引 (e.g. "You are in the middle of a room. Looking quickly around you...")
-      存储内容: 环境反思, 物品位置经验, 环境交互教训
+    双树记忆管理器（对外统一接口）
 
-    对外接口与原 PRTreeMemory 保持兼容。
+    task_tree: 任务目标索引 → 程序性 Skill（怎么做）
+    env_tree:  环境描述索引 → 声明性知识（在哪找/怎么操作）
     """
 
-    def __init__(self, retriever: VectorRetriever):
+    def __init__(
+        self,
+        retriever: VectorRetriever,
+        task_base_threshold: Optional[float] = None,
+        env_base_threshold: Optional[float] = None,
+        consolidation_threshold: Optional[int] = None,
+    ):
         self.retriever = retriever
+        self.consolidation_threshold = consolidation_threshold if consolidation_threshold is not None else CONSOLIDATION_THRESHOLD
+        self.consolidation_count = 0  # 固化触发次数（用于参数敏感性分析）
 
-        # 创建两棵子树 (各自使用独立的阈值策略)
-        # 任务树: 宽松阈值，增加召回率 (任务描述短、语义差异大)
+        _tb = task_base_threshold if task_base_threshold is not None else TASK_TREE_BASE_THRESHOLD
+        _eb = env_base_threshold if env_base_threshold is not None else ENV_TREE_BASE_THRESHOLD
+
         self.task_tree = PRTreeMemory(
             retriever, tree_name="task",
-            base_threshold=TASK_TREE_BASE_THRESHOLD,
+            base_threshold=_tb,
             depth_step=TASK_TREE_DEPTH_STEP,
-            max_threshold=TASK_TREE_MAX_THRESHOLD
+            max_threshold=TASK_TREE_MAX_THRESHOLD,
+            embed_with_activation=TASK_TREE_EMBED_WITH_ACTIVATION,
         )
-        # 环境树: 严格阈值，保证精确匹配 (环境描述长、相似环境 embedding 天然接近)
         self.env_tree = PRTreeMemory(
             retriever, tree_name="env",
-            base_threshold=ENV_TREE_BASE_THRESHOLD,
+            base_threshold=_eb,
             depth_step=ENV_TREE_DEPTH_STEP,
-            max_threshold=ENV_TREE_MAX_THRESHOLD
+            max_threshold=ENV_TREE_MAX_THRESHOLD,
+            embed_with_activation=False,
         )
+        self.stats = self._compute_stats()
+        self._skill_compiler = SkillCompiler()
+        self._knowledge_compiler = KnowledgeCompiler()
 
-        # 合并统计
-        self.stats = {
-            "total_nodes": 2,
-            "max_depth": 0,
-            "task_tree_nodes": 1,
-            "env_tree_nodes": 1,
+    def _compute_stats(self) -> Dict[str, int]:
+        return {
+            "task_tree_nodes": self.task_tree.stats["total_nodes"],
+            "env_tree_nodes": self.env_tree.stats["total_nodes"],
+            "total_nodes": self.task_tree.stats["total_nodes"] + self.env_tree.stats["total_nodes"],
+            "max_depth": max(self.task_tree.stats["max_depth"], self.env_tree.stats["max_depth"]),
         }
 
-        # 尝试加载
-        self._load_trees_if_exist()
+    def _sync_stats(self) -> None:
+        self.stats = self._compute_stats()
 
-    def _load_trees_if_exist(self):
-        task_file = Path(STORAGE_PATH) / "task_tree.json"
-        env_file = Path(STORAGE_PATH) / "env_tree.json"
-        if task_file.exists():
-            self.task_tree.load_tree(str(task_file))
-        if env_file.exists():
-            self.env_tree.load_tree(str(env_file))
-        self._sync_stats()
-
-    def _sync_stats(self):
-        self.stats["task_tree_nodes"] = self.task_tree.stats["total_nodes"]
-        self.stats["env_tree_nodes"] = self.env_tree.stats["total_nodes"]
-        self.stats["total_nodes"] = (
-            self.task_tree.stats["total_nodes"] + self.env_tree.stats["total_nodes"]
-        )
-        self.stats["max_depth"] = max(
-            self.task_tree.stats["max_depth"],
-            self.env_tree.stats["max_depth"]
-        )
-
-    # =====================================================================
-    # 检索接口
-    # =====================================================================
+    # ------------------------------------------------------------------
+    # 检索
+    # ------------------------------------------------------------------
 
     def retrieve_task_path(self, task_description: str) -> List[MemoryNode]:
-        """在任务树中检索"""
         return self.task_tree.retrieve_context_path(task_description)
 
     def retrieve_env_path(self, env_description: str) -> List[MemoryNode]:
-        """在环境树中检索"""
         return self.env_tree.retrieve_context_path(env_description)
 
-    def retrieve_dual_paths(
-        self, task_description: str, env_description: str
-    ) -> Dict[str, List[MemoryNode]]:
-        """同时检索两棵树，返回两条路径"""
-        task_path = self.retrieve_task_path(task_description)
-        env_path = self.retrieve_env_path(env_description)
+    def retrieve_dual_paths(self, task_description: str, env_description: str) -> Dict[str, List[MemoryNode]]:
         return {
-            "task_path": task_path,
-            "env_path": env_path
+            "task_path": self.retrieve_task_path(task_description),
+            "env_path": self.retrieve_env_path(env_description),
         }
 
-    # =====================================================================
-    # 写入接口
-    # =====================================================================
+    def retrieve_task_path_flat(self, task_description: str) -> List[MemoryNode]:
+        return self.task_tree.retrieve_context_path_flat(task_description)
 
-    def add_task_experience(
-        self,
-        anchor_node: MemoryNode,
-        scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        result_status: Union[str, ResultStatus],
-        force_sibling: bool = False
-    ) -> MemoryNode:
-        """向任务树写入经验"""
-        node = self.task_tree.add_experience_node(
-            anchor_node=anchor_node,
-            scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=result_status,
-            force_sibling=force_sibling
-        )
+    def retrieve_env_path_flat(self, env_description: str) -> List[MemoryNode]:
+        return self.env_tree.retrieve_context_path_flat(env_description)
+
+    def retrieve_dual_paths_flat(self, task_description: str, env_description: str) -> Dict[str, List[MemoryNode]]:
+        return {
+            "task_path": self.retrieve_task_path_flat(task_description),
+            "env_path": self.retrieve_env_path_flat(env_description),
+        }
+
+    # ------------------------------------------------------------------
+    # 写入
+    # ------------------------------------------------------------------
+
+    def add_task_root_skill(self, scenario_description: str, skill: Dict, result_status=ResultStatus.SUCCESS) -> MemoryNode:
+        node = self.task_tree.add_root_skill(scenario_description, skill, result_status)
         self._sync_stats()
         return node
 
-    def add_env_experience(
-        self,
-        anchor_node: MemoryNode,
-        scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        result_status: Union[str, ResultStatus],
-        force_sibling: bool = False
-    ) -> MemoryNode:
-        """向环境树写入经验"""
-        node = self.env_tree.add_experience_node(
-            anchor_node=anchor_node,
-            scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=result_status,
-            force_sibling=force_sibling
-        )
+    def add_task_residual_skill(self, anchor_node: MemoryNode, scenario_description: str, skill: Dict, result_status, force_sibling=False) -> MemoryNode:
+        node = self.task_tree.add_residual_skill(anchor_node, scenario_description, skill, result_status, force_sibling)
         self._sync_stats()
         return node
 
-    def add_task_root_schema(
-        self,
-        scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        result_status: str = ResultStatus.SUCCESS
-    ) -> MemoryNode:
-        node = self.task_tree.add_root_schema(
-            scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=result_status
-        )
+    def add_env_root_skill(self, scenario_description: str, skill: Dict, result_status=ResultStatus.SUCCESS) -> MemoryNode:
+        node = self.env_tree.add_root_skill(scenario_description, skill, result_status)
         self._sync_stats()
         return node
 
-    def add_env_root_schema(
-        self,
-        scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        result_status: str = ResultStatus.SUCCESS
-    ) -> MemoryNode:
-        node = self.env_tree.add_root_schema(
-            scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=result_status
-        )
+    def add_env_residual_skill(self, anchor_node: MemoryNode, scenario_description: str, skill: Dict, result_status, force_sibling=False) -> MemoryNode:
+        node = self.env_tree.add_residual_skill(anchor_node, scenario_description, skill, result_status, force_sibling)
         self._sync_stats()
         return node
 
-    # =====================================================================
+    # ------------------------------------------------------------------
     # 持久化
-    # =====================================================================
+    # ------------------------------------------------------------------
 
-    def save_trees(self, task_filepath: Optional[str] = None, env_filepath: Optional[str] = None):
-        task_fp = task_filepath or str(Path(STORAGE_PATH) / "task_tree.json")
-        env_fp = env_filepath or str(Path(STORAGE_PATH) / "env_tree.json")
-        self.task_tree.save_tree(task_fp)
-        self.env_tree.save_tree(env_fp)
+    def save_trees(self, task_filepath: str, env_filepath: str) -> None:
+        self.task_tree.save_tree(task_filepath)
+        self.env_tree.save_tree(env_filepath)
 
-    def load_trees(self, task_filepath: str, env_filepath: str):
+    def load_trees(self, task_filepath: str, env_filepath: str) -> None:
         self.task_tree.load_tree(task_filepath)
         self.env_tree.load_tree(env_filepath)
         self._sync_stats()
 
-    # 兼容旧接口
-    def save_tree(self, filepath: Optional[str] = None):
-        """兼容旧接口：保存两棵树（filepath 用作前缀）"""
-        if filepath:
-            base = filepath.replace(".json", "")
-            self.save_trees(f"{base}_task.json", f"{base}_env.json")
-        else:
-            self.save_trees()
-
-    def load_tree(self, filepath: str):
-        """兼容旧接口：加载两棵树"""
+    def save_tree(self, filepath: str) -> None:
+        """兼容接口：filepath 去掉 .json 后缀作为前缀"""
         base = filepath.replace(".json", "")
-        task_fp = f"{base}_task.json"
-        env_fp = f"{base}_env.json"
-        if Path(task_fp).exists():
-            self.task_tree.load_tree(task_fp)
-        if Path(env_fp).exists():
-            self.env_tree.load_tree(env_fp)
-        self._sync_stats()
+        self.save_trees(f"{base}_task.json", f"{base}_env.json")
+
+    def load_tree(self, filepath: str) -> None:
+        """兼容接口"""
+        base = filepath.replace(".json", "")
+        self.load_trees(f"{base}_task.json", f"{base}_env.json")
+
+    def get_last_committed_episode(self) -> int:
+        return max(
+            self.task_tree.get_last_episode_idx(),
+            self.env_tree.get_last_episode_idx(),
+        )
+
+    # ------------------------------------------------------------------
+    # 记忆固化
+    # ------------------------------------------------------------------
+
+    def trigger_consolidation_check(self, node: MemoryNode, llm_client=None, tree_type: str = "task") -> None:
+        if node.meta.get("is_consolidated", False):
+            return
+        if node.meta.get("success_count", 0) < self.consolidation_threshold:
+            return
+        self.consolidation_count += 1
+
+        logger.info(f"[Consolidation/{tree_type}] Node {node.node_id[:8]} hit success_count={node.meta['success_count']} — compiling...")
+
+        path = node.get_path_to_root()
+        chain_texts = []
+        for n in path:
+            if "GLOBAL_ROOT_PLACEHOLDER" in n.payload.get("scenario_description", ""):
+                continue
+            chain_texts.append(
+                f"[{n.meta.get('node_type', 'RESIDUAL')}]\n"
+                f"Activation: {n.payload.get('activation_condition', '')}\n"
+                f"Execution: {n.payload.get('execution_procedure', '')}\n"
+                f"Termination: {n.payload.get('termination_condition', '')}"
+            )
+
+        if not chain_texts:
+            return
+
+        if tree_type == "env":
+            compiled = self._knowledge_compiler.compile_to_knowledge(chain_texts, llm_client)
+            if not compiled:
+                return
+            new_root = self.add_env_root_skill(
+                scenario_description=node.payload.get("scenario_description", "consolidated"),
+                skill=compiled,
+                result_status=ResultStatus.SUCCESS,
+            )
+        else:
+            compiled = self._skill_compiler.compile_to_skill(chain_texts, llm_client)
+            if not compiled:
+                return
+            new_root = self.add_task_root_skill(
+                scenario_description=node.payload.get("scenario_description", "consolidated"),
+                skill=compiled,
+                result_status=ResultStatus.SUCCESS,
+            )
+
+        new_root.meta["is_consolidated_root"] = True
+        node.meta["is_consolidated"] = True
+        logger.info(f"[Consolidation/{tree_type}] ✅ New ROOT {new_root.node_id[:8]} written from chain ending at {node.node_id[:8]}")

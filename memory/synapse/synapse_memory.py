@@ -106,6 +106,7 @@ class SynapseMemoryStore:
         top_k: int = 1,
         embed_model: str = "text-embedding-ada-002",
         allow_updates: bool = True,
+        load_existing: bool = True,
     ):
         self.memory_path   = Path(memory_path)
         self.memory_path.mkdir(parents=True, exist_ok=True)
@@ -120,7 +121,8 @@ class SynapseMemoryStore:
         self._faiss_store             = None
         self._embedding               = None
 
-        self._load()
+        if load_existing:
+            self._load()
 
     # ------------------------------------------------------------------
     # 离线建库（类方法）

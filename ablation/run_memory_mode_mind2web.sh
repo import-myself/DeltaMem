@@ -1,9 +1,8 @@
-export API_KEY='sk-uQ3Q4igYxnqjrEAcXfatMws18iO180Vn8dFRSYPcpmj3Zpc2'
-start_port=8011
-model_name="Qwen3-14B"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
+export DEEPSEEK_BASE_URL='https://api.deepseek.com'
+model_name="deepseek-v4-flash"
 split="test_task"
 benchmark="mind2web"
-export BASE_URL="http://localhost:$start_port/v1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRTREE_ROOT="$(dirname "${SCRIPT_DIR}")"

@@ -1,5 +1,5 @@
 """
-PRTree 联合阈值网格搜索（支持 ALFWorld / ScienceWorld / Mind2Web）
+PRTree 联合阈值网格搜索（支持 ALFWorld / ScienceWorld / Mind2Web / WebShop）
 ====================================================================
 对 task 树和 env 树的 (base_threshold, depth_step) 进行四维联合网格搜索，
 找出使成功率最优的参数组合。
@@ -15,11 +15,12 @@ PRTree 联合阈值网格搜索（支持 ALFWorld / ScienceWorld / Mind2Web）
   {output_csv_prefix}_alfworld.csv
   {output_csv_prefix}_sciworld.csv
   {output_csv_prefix}_mind2web.csv
+  {output_csv_prefix}_webshop.csv
 
 已跑过的 exp_id 自动跳过（断点续跑）。
 
 示例：
-  cd /data/REDACTED_USER/PRTree/ablation
+  cd /path/to/DeltaMem/ablation
 
   # 单个 benchmark
   python run_joint_threshold_search.py \\
@@ -30,7 +31,14 @@ PRTree 联合阈值网格搜索（支持 ALFWorld / ScienceWorld / Mind2Web）
       --max-episodes 50 \\
       --output-csv results/joint_threshold_search
 
-  # 全部三个 benchmark
+  # WebShop
+  python run_joint_threshold_search.py \\
+      --benchmark webshop \\
+      --model deepseek-v4-flash \\
+      --webshop-sessions-file /tmp/ETO/eval_agent/data/webshop/test_indices.json \\
+      --output-csv results/joint_threshold_search
+
+  # 全部四个 benchmark
   python run_joint_threshold_search.py \\
       --benchmark all \\
       --model Qwen3-14B \\
@@ -58,6 +66,7 @@ _PRTREE_ROOT = _THIS_DIR.parent
 _ALFWORLD    = _PRTREE_ROOT / "ALFWorld"
 _SCIWORLD    = _PRTREE_ROOT / "ScienceWorld"
 _MIND2WEB    = _PRTREE_ROOT / "Mind2web"
+_WEBSHOP     = _PRTREE_ROOT / "WebShop"
 
 sys.path.insert(0, str(_PRTREE_ROOT))
 
@@ -115,6 +124,18 @@ CSV_FIELDNAMES: Dict[str, List[str]] = {
         "env_base_threshold",  "env_depth_step",
         "success_rate",
         "avg_element_acc", "avg_action_f1", "avg_step_success_rate",
+        "task_hit_rate", "env_hit_rate",
+        "avg_task_retrieval_len_all", "avg_env_retrieval_len_all",
+        "avg_task_retrieval_len_hit", "avg_env_retrieval_len_hit",
+        "task_tree_total_nodes", "env_tree_total_nodes",
+        "task_tree_level_counts", "env_tree_level_counts",
+        "n_episodes", "split", "timestamp",
+    ],
+    "webshop": [
+        "exp_id", "benchmark",
+        "task_base_threshold", "task_depth_step",
+        "env_base_threshold",  "env_depth_step",
+        "success_rate", "avg_reward", "avg_steps",
         "task_hit_rate", "env_hit_rate",
         "avg_task_retrieval_len_all", "avg_env_retrieval_len_all",
         "avg_task_retrieval_len_hit", "avg_env_retrieval_len_hit",
@@ -492,11 +513,95 @@ def run_mind2web_experiment(
     return row
 
 
+# =============================================================================
+# WebShop 单次实验
+# =============================================================================
+
+def run_webshop_experiment(
+    args,
+    task_base: float, task_step: float,
+    env_base:  float, env_step:  float,
+    exp_id: str,
+) -> Dict[str, Any]:
+    if str(_WEBSHOP) not in sys.path:
+        sys.path.insert(0, str(_WEBSHOP))
+
+    import gym
+    from web_agent_site.envs import WebAgentTextEnv  # noqa: F401
+    from agent_webshop_dual import DualTreeWebShopAgent
+    from common.llm_client import create_llm_client
+
+    sessions_file = getattr(args, "webshop_sessions_file",
+                            "/tmp/ETO/eval_agent/data/webshop/test_indices.json")
+    with open(sessions_file) as f:
+        all_sessions = json.load(f)
+
+    max_steps = getattr(args, "webshop_max_steps", 15)
+    n_episodes = len(all_sessions) if not args.max_episodes else min(args.max_episodes, len(all_sessions))
+    sessions = all_sessions[:n_episodes]
+
+    logger.info("Bootstrapping WebShop env (loading 1000 products) ...")
+    env = gym.make("WebAgentTextEnv-v0", observation_mode="text", num_products=1000)
+    logger.info("Env ready.")
+
+    llm_client = create_llm_client(args.model)
+    agent = DualTreeWebShopAgent(
+        agent_name="JointGridSearchAgent",
+        llm_client=llm_client,
+    )
+
+    load_memory_path = getattr(args, "webshop_load_memory", None)
+    if load_memory_path:
+        agent.load_memory(load_memory_path)
+        stats = agent.get_memory_stats()
+        logger.info(f"  [WebShop] 📥 Loaded: task={stats['task_tree_nodes']} env={stats['env_tree_nodes']}")
+
+    _set_tree_thresholds(agent, task_base, task_step, env_base, env_step)
+
+    results: List[Dict[str, Any]] = []
+    for ep_idx, session_id in enumerate(sessions):
+        try:
+            result_dict, _ = agent.run_episode(
+                env=env,
+                session_id=session_id,
+                max_steps=max_steps,
+                episode_idx=ep_idx,
+            )
+        except Exception as e:
+            logger.error(f"    [WebShop] Episode {ep_idx} (session={session_id}) failed: {e}")
+            result_dict = {
+                "reward": 0.0, "steps": max_steps, "success": False,
+                "task_memory_used": False, "env_memory_used": False,
+                "task_retrieval_length": 0, "env_retrieval_length": 0,
+            }
+        results.append(result_dict)
+
+        if (ep_idx + 1) % 10 == 0:
+            sr  = sum(r["success"] for r in results) / len(results)
+            rwd = sum(r["reward"]  for r in results) / len(results)
+            logger.info(f"    [WebShop] Ep {ep_idx + 1}/{n_episodes}: SR={sr:.2%}  AvgReward={rwd:.4f}")
+
+    n = len(results)
+    row = _build_base_stats(results, agent, "webshop", "test",
+                            task_base, task_step, env_base, env_step, exp_id)
+    row["success_rate"] = round(sum(r["success"]       for r in results) / n, 6)
+    row["avg_reward"]   = round(sum(r["reward"]        for r in results) / n, 4)
+    row["avg_steps"]    = round(sum(r.get("steps", 0)  for r in results) / n, 4)
+
+    logger.info(
+        f"  ✅ [WebShop] SR={row['success_rate']:.2%}  "
+        f"AvgReward={row['avg_reward']:.4f}  Steps={row['avg_steps']:.1f}  "
+        f"TaskHit={row['task_hit_rate']:.2%}  EnvHit={row['env_hit_rate']:.2%}"
+    )
+    return row
+
+
 # ── benchmark → runner 映射 ──────────────────────────────────────────────────
 BENCHMARK_RUNNERS = {
     "alfworld":  run_alfworld_experiment,
     "sciworld":  run_sciworld_experiment,
     "mind2web":  run_mind2web_experiment,
+    "webshop":   run_webshop_experiment,
 }
 
 
@@ -567,7 +672,7 @@ def analyze_results(csv_path: str, benchmark: str, top_k: int = 5) -> None:
         return
 
     is_mind2web = (benchmark == "mind2web")
-    is_sciworld = (benchmark == "sciworld")
+    is_sciworld = (benchmark in ("sciworld", "webshop"))
 
     rows: List[Dict[str, Any]] = []
     with open(p, newline="", encoding="utf-8") as f:
@@ -716,9 +821,9 @@ def main():
 
     # benchmark 选择
     p.add_argument("--benchmark", type=str,
-                   choices=["alfworld", "sciworld", "mind2web", "all"],
+                   choices=["alfworld", "sciworld", "mind2web", "webshop", "all"],
                    default="alfworld",
-                   help="要测试的 benchmark，all 表示全部三个")
+                   help="要测试的 benchmark，all 表示全部四个")
 
     # 通用实验参数
     p.add_argument("--model",        default="gpt-4o-mini")
@@ -757,6 +862,14 @@ def main():
                    choices=["test_task", "test_website", "test_domain"],
                    default="test_task")
     p.add_argument("--mind2web-load-memory", type=str, default=None)
+
+    # WebShop 专属
+    p.add_argument("--webshop-sessions-file", type=str,
+                   default="/tmp/ETO/eval_agent/data/webshop/test_indices.json",
+                   help="JSON list of session ids (默认 ETO test_indices)")
+    p.add_argument("--webshop-max-steps", type=int, default=15,
+                   help="WebShop 每局最大步数（默认 15）")
+    p.add_argument("--webshop-load-memory", type=str, default=None)
 
     # 分析参数
     p.add_argument("--top-k", type=int, default=5)

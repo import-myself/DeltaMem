@@ -9,7 +9,7 @@ build_synapse_memory.py  —  ALFWorld Synapse 记忆库离线构建脚本
 
 运行方式
 --------
-cd /data/REDACTED_USER/PRTree/ALFWorld_New
+cd /path/to/DeltaMem/ALFWorld
 python build_synapse_memory.py \
     --traj-dir trajectories/offline_dual \
     --memory-path storage/synapse_memory \

@@ -66,67 +66,79 @@ class VectorRetriever:
         return scores
 
     def retrieve_candidates(
-        self, 
-        query_embedding: np.ndarray, 
+        self,
+        query_embedding: np.ndarray,
         candidate_nodes: List[MemoryNode],
         threshold: float = SIMILARITY_THRESHOLD,
-        top_k: Optional[int] = TOP_K_CANDIDATES
+        top_k: Optional[int] = TOP_K_CANDIDATES,
+        failure_penalty: float = 0.0,
     ) -> List[Tuple[MemoryNode, float]]:
         """
         核心检索函数
-        
+
         Args:
+            failure_penalty: FAILURE 节点在原始 cosine score 上扣除的惩罚值（0~1），
+                             用于在相同语义下优先召回成功节点。
             top_k: 如果为 None，则返回所有满足阈值的节点 (用于 BFS)
         """
         if not candidate_nodes:
             return []
-        
+
         # 1. 准备矩阵
         candidate_matrix = np.array([node.embedding for node in candidate_nodes])
-        
+
         # 2. 批量计算
         scores = self._batch_cosine_similarity(query_embedding, candidate_matrix)
-        
-        # 3. 过滤与打包
+
+        # 3. failure penalty
+        if failure_penalty > 0.0:
+            for i, node in enumerate(candidate_nodes):
+                if node.meta.get("result_status") == "FAILURE":
+                    scores[i] -= failure_penalty
+
+        # 4. 过滤与打包
         results = []
         for i, score in enumerate(scores):
             if score >= threshold:
                 results.append((candidate_nodes[i], float(score)))
-        
-        # 4. 排序
+
+        # 5. 排序
         results.sort(key=lambda x: x[1], reverse=True)
-        
-        # 5. 截断 (如果指定了 top_k)
+
+        # 6. 截断 (如果指定了 top_k)
         if top_k is not None:
             return results[:top_k]
-        
+
         return results
 
     def retrieve_all_matches(
         self,
         query_embedding: np.ndarray,
         candidate_nodes: List[MemoryNode],
-        threshold: float = SIMILARITY_THRESHOLD
+        threshold: float = SIMILARITY_THRESHOLD,
+        failure_penalty: float = 0.0,
     ) -> List[Tuple[MemoryNode, float]]:
-        """
-        获取所有匹配节点（专门用于 BFS/Beam Search）
-        语义上等同于 retrieve_candidates(..., top_k=None)
-        """
+        """获取所有匹配节点（专门用于 BFS/Beam Search）"""
         return self.retrieve_candidates(
             query_embedding=query_embedding,
             candidate_nodes=candidate_nodes,
             threshold=threshold,
-            top_k=None  # Explicitly return all
+            top_k=None,
+            failure_penalty=failure_penalty,
         )
-    
+
     def retrieve_best_match(
-        self, 
-        query_embedding: np.ndarray, 
+        self,
+        query_embedding: np.ndarray,
         candidate_nodes: List[MemoryNode],
-        threshold: float = SIMILARITY_THRESHOLD
+        threshold: float = SIMILARITY_THRESHOLD,
+        failure_penalty: float = 0.0,
     ) -> Optional[Tuple[MemoryNode, float]]:
         """获取最佳单点 (DFS 贪婪搜索用)"""
-        results = self.retrieve_candidates(query_embedding, candidate_nodes, threshold, top_k=1)
+        results = self.retrieve_candidates(
+            query_embedding, candidate_nodes, threshold,
+            top_k=1, failure_penalty=failure_penalty,
+        )
         if results:
             return results[0]
         return None

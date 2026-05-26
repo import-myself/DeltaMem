@@ -6,9 +6,12 @@ PR-Tree Configuration File (ScienceWorld)
 import os
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent        # ScienceWorld/
+_ROOT = _HERE.parent                           # project root
+
 # ==================== 路径配置 ====================
 # 本地 Embedding 模型路径 (使用 sentence-transformers)
-EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/PRTree/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = os.environ.get("EMBEDDING_MODEL_PATH", str(_ROOT / "embedding" / "e5-base-v2"))
 
 # 记忆存储路径
 STORAGE_PATH = "./storage"
@@ -24,13 +27,14 @@ SIMILARITY_THRESHOLD_RESIDUAL = 0.85
 
 # ==================== 双树差异化阈值配置 ====================
 # 任务树: 任务目标描述较短且语义集中
-TASK_TREE_BASE_THRESHOLD = 0.80
-TASK_TREE_DEPTH_STEP = 0.03
+TASK_TREE_BASE_THRESHOLD = 0.84   # 网格搜索最优 (dev sr=0.6907, reward=0.8498)
+TASK_TREE_DEPTH_STEP = 0.0
 TASK_TREE_MAX_THRESHOLD = 0.95
+TASK_TREE_EMBED_WITH_ACTIVATION = False
 
 # 环境树: ScienceWorld 场景描述较长，需要较高阈值精确匹配
-ENV_TREE_BASE_THRESHOLD = 0.88
-ENV_TREE_DEPTH_STEP = 0.02
+ENV_TREE_BASE_THRESHOLD = 0.86   # 网格搜索最优 (dev sr=0.6907, reward=0.8498)
+ENV_TREE_DEPTH_STEP = 0.0
 ENV_TREE_MAX_THRESHOLD = 0.99
 
 # ==================== 检索参数 ====================
@@ -44,12 +48,15 @@ JSON_ENSURE_ASCII = False
 TREE_STRUCTURE_FILE = "prtree_structure.json"
 TREE_METADATA_FILE = "prtree_metadata.json"
 
+# ==================== 记忆固化参数 ====================
+CONSOLIDATION_THRESHOLD = 3
+
+# FAILURE 节点检索惩罚
+FAILURE_NODE_PENALTY = 0.05
+
 # ==================== 日志参数 ====================
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# ==================== 自动创建存储目录 ====================
-Path(STORAGE_PATH).mkdir(parents=True, exist_ok=True)
 
 # ==================== 节点状态枚举 ====================
 class NodeStatus:

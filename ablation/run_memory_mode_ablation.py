@@ -253,12 +253,16 @@ def run_sciworld_experiment(args, memory_mode: str) -> Dict[str, Any]:
     n_episodes = min(args.max_episodes or len(task_idxs), len(task_idxs))
 
     llm_client = create_llm_client(args.model)
-    icl_path   = str(_SCIWORLD / "data/sciworld_icl.json")
+    icl_path          = str(_SCIWORLD / "data/sciworld_icl.json")
+    max_steps_path    = str(_SCIWORLD / "data/sciworld/max_steps.json")
+    taskname2id_path  = str(_SCIWORLD / "data/sciworld/taskname2id.json")
     agent = DualTreeSciWorldAgent(
         agent_name=f"SciAblation_{memory_mode}",
         llm_client=llm_client,
         icl_num=args.icl_num,
         icl_data_path=icl_path,
+        max_steps_path=max_steps_path,
+        taskname2id_path=taskname2id_path,
     )
     if args.sciworld_load_memory:
         agent.load_memory(args.sciworld_load_memory)
@@ -275,7 +279,9 @@ def run_sciworld_experiment(args, memory_mode: str) -> Dict[str, Any]:
             env=env,
             task_name=task_name,
             variation_idx=variation_idx,
-            memory_mode=memory_mode,
+            memory_mode=memory_mode if memory_mode != "none" else "both",
+            no_memory=(memory_mode == "none"),
+            episode_idx=ep_idx,
         )
         result = messages[-1]
         results.append(result)
@@ -380,6 +386,89 @@ def run_mind2web_experiment(args, memory_mode: str) -> Dict[str, Any]:
 
 
 # =====================================================================
+# WebShop
+# =====================================================================
+
+_WEBSHOP = _PRTREE_ROOT / "WebShop"
+_WEBSHOP_SESSIONS_DEFAULT = "/tmp/ETO/eval_agent/data/webshop/test_indices.json"
+
+
+def run_webshop_experiment(args, memory_mode: str) -> Dict[str, Any]:
+    """运行 WebShop 单组 memory_mode 实验"""
+    if str(_WEBSHOP) not in sys.path:
+        sys.path.insert(0, str(_WEBSHOP))
+
+    import gym
+    from web_agent_site.envs import WebAgentTextEnv  # noqa: triggers registration
+    from agent_webshop_dual import DualTreeWebShopAgent
+    from common.llm_client import create_llm_client
+
+    sessions_file = getattr(args, "webshop_sessions_file", None) or _WEBSHOP_SESSIONS_DEFAULT
+    with open(sessions_file) as f:
+        sessions = json.load(f)
+    if args.max_episodes:
+        sessions = sessions[: args.max_episodes]
+    n_episodes = len(sessions)
+
+    env = gym.make("WebAgentTextEnv-v0", observation_mode="text", num_products=1000)
+    logger.info(f"[WebShop] Env ready. {n_episodes} sessions, memory_mode={memory_mode}")
+
+    llm_client = create_llm_client(args.model)
+    agent = DualTreeWebShopAgent(
+        agent_name=f"WebShopAblation_{memory_mode}",
+        llm_client=llm_client,
+    )
+    if getattr(args, "webshop_load_memory", None):
+        agent.load_memory(args.webshop_load_memory)
+        stats = agent.get_memory_stats()
+        logger.info(f"[WebShop] Loaded: task={stats['task_tree_nodes']}, env={stats['env_tree_nodes']}")
+
+    max_steps = getattr(args, "webshop_max_steps", None) or 15
+    exp_id   = f"webshop__{memory_mode}"
+    traj_dir = os.path.join(args.traj_dir or "trajectories/memory_mode", exp_id)
+    os.makedirs(traj_dir, exist_ok=True)
+
+    results = []
+    for ep_idx, session_id in enumerate(sessions):
+        try:
+            result, messages = agent.run_episode(
+                env=env,
+                session_id=session_id,
+                max_steps=max_steps,
+                memory_mode=memory_mode,
+                episode_idx=ep_idx,
+            )
+        except Exception as e:
+            logger.error(f"Episode {ep_idx} (session={session_id}) failed: {e}")
+            result = {
+                "success": False, "reward": 0.0, "steps": max_steps,
+                "task_memory_used": False, "env_memory_used": False,
+                "task_retrieval_length": 0, "env_retrieval_length": 0,
+            }
+            messages = []
+        results.append(result)
+        with open(os.path.join(traj_dir, f"{ep_idx}.json"), "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
+        if (ep_idx + 1) % 20 == 0:
+            logger.info(f"  [WebShop/{memory_mode}] Ep {ep_idx+1}/{n_episodes}: "
+                        f"SR={sum(r['success'] for r in results)/len(results):.2%} "
+                        f"AvgRew={sum(r['reward'] for r in results)/len(results):.4f}")
+
+    if args.save_tree_prefix:
+        agent.save_memory(f"{args.save_tree_prefix}_{exp_id}")
+
+    n = len(results)
+    row = _base_row("webshop", memory_mode, "test", n, results, agent)
+    row["success_rate"]          = round(sum(r["success"] for r in results) / n, 6)
+    row["avg_steps"]             = round(sum(r["steps"]  for r in results) / n, 4)
+    row["avg_reward"]            = round(sum(r["reward"] for r in results) / n, 6)
+    row["avg_element_acc"]       = "N/A"
+    row["avg_action_f1"]         = "N/A"
+    row["avg_step_success_rate"] = "N/A"
+    return row
+
+
+# =====================================================================
 # CSV 追加写入
 # =====================================================================
 
@@ -415,6 +504,7 @@ BENCHMARK_RUNNERS = {
     "alfworld":  run_alfworld_experiment,
     "sciworld":  run_sciworld_experiment,
     "mind2web":  run_mind2web_experiment,
+    "webshop":   run_webshop_experiment,
 }
 
 
@@ -426,8 +516,8 @@ def main():
 
     # 实验控制
     p.add_argument("--benchmark", type=str,
-                   choices=["alfworld", "sciworld", "mind2web", "all"], default="all",
-                   help="要测试的 benchmark，all 表示全部三个")
+                   choices=["alfworld", "sciworld", "mind2web", "webshop", "all"], default="all",
+                   help="要测试的 benchmark，all 表示全部")
     p.add_argument("--memory-modes", type=str, default="task_only,env_only",
                    help="逗号分隔的记忆模式列表，可选 task_only / env_only / both")
     p.add_argument("--model",    type=str, default="gpt-4o-mini")
@@ -456,6 +546,12 @@ def main():
                    choices=["test_task", "test_website", "test_domain"],
                    default="test_task")
     p.add_argument("--mind2web-load-memory", type=str, default=None)
+
+    # WebShop 专属
+    p.add_argument("--webshop-sessions-file", dest="webshop_sessions_file", type=str,
+                   default=_WEBSHOP_SESSIONS_DEFAULT)
+    p.add_argument("--webshop-load-memory", dest="webshop_load_memory", type=str, default=None)
+    p.add_argument("--webshop-max-steps",   dest="webshop_max_steps",   type=int, default=15)
 
     args = p.parse_args()
 

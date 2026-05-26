@@ -1,10 +1,6 @@
 """
-Dual Memory Reader (v6.0)
-双树记忆读取器：分别从任务树和环境树读取经验并融合为统一的 Prompt Context
-
-v6.0 设计:
-- 给 Agent 的渲染: 只展示 memory_description + content_body (scenario_description 只做检索索引)
-- 给反思 LLM 的渲染: 展示 memory_description + content_body，供残差对比
+Dual Memory Reader (v7.0 - Skill Format Only)
+双树记忆读取器：仅渲染 Skill 格式字段
 """
 
 import logging
@@ -23,60 +19,93 @@ class DualMemoryReader:
     def _is_empty_path(self, path: List[MemoryNode]) -> bool:
         if not path:
             return True
-        if len(path) == 1:
-            desc = path[0].payload.get("scenario_description", "")
-            if "GLOBAL_ROOT_PLACEHOLDER" in desc:
-                return True
+        if len(path) == 1 and "GLOBAL_ROOT_PLACEHOLDER" in path[0].payload.get("scenario_description", ""):
+            return True
         return False
 
+    def _is_placeholder(self, node: MemoryNode) -> bool:
+        return "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", "")
+
+    def _render_task_node(self, node: MemoryNode, delta_idx: int, is_base: bool) -> str:
+        payload = node.payload
+        is_success = node.meta.get("result_status") == ResultStatus.SUCCESS
+
+        if is_success:
+            if is_base:
+                text = f"### [Base Skill] [✅ SUCCESS]\n"
+                text += f"- **Trigger**: {payload['activation_condition']}\n"
+                if payload.get("trajectory"):
+                    # 新格式：trajectory（具体轨迹）+ execution_procedure（hint提示）
+                    text += f"\n**Reference Trajectory** (read and imitate the reasoning pattern):\n"
+                    text += payload["trajectory"].replace("\\n", "\n") + "\n"
+                    if payload.get("execution_procedure"):
+                        text += f"\n**Key Tip**: {payload['execution_procedure']}\n"
+                else:
+                    # 旧格式兼容
+                    text += f"- **Procedure**:\n{payload['execution_procedure']}\n"
+                if payload.get("termination_condition"):
+                    text += f"- **Done when**: {payload['termination_condition']}\n"
+            else:
+                text = f"### [Skill Patch {delta_idx}] [✅ SUCCESS]\n"
+                text += f"- **When to apply**: {payload['activation_condition']}\n"
+                text += f"- **Revision / Additional notes**:\n{payload['execution_procedure']}\n"
+                if payload.get("termination_condition"):
+                    text += f"- **Done when**: {payload['termination_condition']}\n"
+        else:
+            title = f"[Base Failure Record] [⛔ FAILURE]" if is_base else f"[Failure Record {delta_idx}] [⛔ FAILURE]"
+            text = f"### {title}\n"
+            text += f"> ⛔ DO NOT follow this as a procedure. This records what went WRONG.\n"
+            text += f"- **When this failure occurred**: {payload['activation_condition']}\n"
+            text += f"- **What failed / What was not tried**:\n{payload['execution_procedure']}\n"
+
+        return text + "\n"
+
+    def _render_env_node(self, node: MemoryNode, delta_idx: int, is_base: bool) -> str:
+        payload = node.payload
+        title = "Base Environment Knowledge" if is_base else f"Environment Knowledge Update {delta_idx}"
+        text = f"### {title}\n"
+        text += f"- **Applicable scenario**: {payload['activation_condition']}\n"
+        text += f"- **Layout & operation rules**:\n{payload['execution_procedure']}\n"
+        if payload.get("termination_condition"):
+            text += f"- **Navigation complete when**: {payload['termination_condition']}\n"
+        return text + "\n"
+
     # =====================================================================
-    # 任务树渲染 (给 Agent 看的 Prompt)
+    # 任务树渲染
     # =====================================================================
 
     def render_task_memory(self, task_path: List[MemoryNode]) -> Optional[str]:
-        """只展示 memory_description + content_body，标注成功/失败状态"""
         if self._is_empty_path(task_path):
             return None
-
+        nodes = [n for n in task_path if not self._is_placeholder(n)]
+        if not nodes:
+            return None
         text = ""
-        item_idx = 0
-        for node in task_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
-                continue
-            item_idx += 1
-            payload = node.payload
-            is_success = node.meta.get("result_status") == ResultStatus.SUCCESS
-            status_label = "✅ SUCCESS" if is_success else "⚠️ FAILURE (learn what to AVOID)"
-            text += f"## Task Experience {item_idx} [{status_label}]\n"
-            text += f"- Summary: {payload['memory_description']}\n"
-            text += f"- Guidance:\n{payload.get('content_body', '')}\n"
-            text += "\n"
-
+        delta_idx = 0
+        for i, node in enumerate(nodes):
+            is_base = (i == 0)
+            if not is_base:
+                delta_idx += 1
+            text += self._render_task_node(node, delta_idx, is_base)
         return text if text.strip() else None
 
     # =====================================================================
-    # 环境树渲染 (给 Agent 看的 Prompt)
+    # 环境树渲染
     # =====================================================================
 
     def render_env_memory(self, env_path: List[MemoryNode]) -> Optional[str]:
-        """只展示 memory_description + content_body，标注成功/失败状态"""
         if self._is_empty_path(env_path):
             return None
-
+        nodes = [n for n in env_path if not self._is_placeholder(n)]
+        if not nodes:
+            return None
         text = ""
-        item_idx = 0
-        for node in env_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
-                continue
-            item_idx += 1
-            payload = node.payload
-            is_success = node.meta.get("result_status") == ResultStatus.SUCCESS
-            status_label = "✅ SUCCESS" if is_success else "⚠️ FAILURE (learn what to AVOID)"
-            text += f"## Environment Experience {item_idx} [{status_label}]\n"
-            text += f"- Summary: {payload['memory_description']}\n"
-            text += f"- Guidance:\n{payload.get('content_body', '')}\n"
-            text += "\n"
-
+        delta_idx = 0
+        for i, node in enumerate(nodes):
+            is_base = (i == 0)
+            if not is_base:
+                delta_idx += 1
+            text += self._render_env_node(node, delta_idx, is_base)
         return text if text.strip() else None
 
     # =====================================================================
@@ -84,10 +113,14 @@ class DualMemoryReader:
     # =====================================================================
 
     def get_dual_narrative_context(
-        self, task_description: str, env_description: str
+        self, task_description: str, env_description: str,
+        task_path: Optional[List[MemoryNode]] = None,
+        env_path: Optional[List[MemoryNode]] = None,
     ) -> Optional[str]:
-        task_path = self.dual_memory.retrieve_task_path(task_description)
-        env_path = self.dual_memory.retrieve_env_path(env_description)
+        if task_path is None:
+            task_path = self.dual_memory.retrieve_task_path(task_description)
+        if env_path is None:
+            env_path = self.dual_memory.retrieve_env_path(env_description)
 
         task_text = self.render_task_memory(task_path)
         env_text = self.render_env_memory(env_path)
@@ -99,16 +132,21 @@ class DualMemoryReader:
         sections = []
         if task_text:
             sections.append(
-                "# Task Strategy Memory\n"
-                "The following are experiences from similar task types that may guide your workflow and element identification strategy.\n"
-                "⚠️ Any element IDs mentioned are from past episodes and DO NOT apply here. Use semantic descriptions to locate elements.\n\n"
+                "# Task Skill Memory (procedural)\n"
+                "Start with the **Base Skill** as your foundation procedure. "
+                "If any **Skill Delta** below has a trigger condition that matches your current situation, "
+                "apply it on top of the base — otherwise execute the base directly. "
+                "Specific values (item names, locations, quantities) are from past episodes — adapt them to the current environment.\n\n"
                 f"{task_text}"
             )
         if env_text:
             sections.append(
-                "# Website Knowledge Memory\n"
-                "The following are experiences from the same or related website that describe UI component layout and interaction rules.\n"
-                "⚠️ Any element IDs mentioned are from past episodes and DO NOT apply here. Use component type, position, and label to locate elements.\n\n"
+                "# Environment Knowledge Memory (declarative)\n"
+                "This is NOT a procedure to execute — it is background knowledge about the environment. "
+                "Use it to decide WHERE to search for objects and HOW to operate receptacles/appliances. "
+                "Start with the **Base Environment Knowledge**, then apply any **Environment Knowledge Updates** "
+                "whose scenario matches your current environment. "
+                "Specific values (item names, locations, states) are from past episodes — verify with observation if in doubt.\n\n"
                 f"{env_text}"
             )
         return "\n---\n\n".join(sections)
@@ -119,46 +157,50 @@ class DualMemoryReader:
         return self.dual_memory.retrieve_dual_paths(task_description, env_description)
 
     # =====================================================================
-    # 整条路径渲染 (用于反思 Prompt，供残差对比)
-    #
-    # 这里展示每个前序节点的 memory_description + content_body
-    # 让反思 LLM 明确知道已有经验说了什么，从而生成差异化的增量
+    # 路径渲染（用于反思 Prompt 对比）
     # =====================================================================
 
-    def render_task_path_for_reflection(self, task_path: List[MemoryNode]) -> str:
-        if self._is_empty_path(task_path):
+    def _render_path_for_reflection(self, path: List[MemoryNode], is_task_tree: bool = True) -> str:
+        if self._is_empty_path(path):
             return ""
-
         text = ""
-        item_idx = 0
-        for node in task_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
+        idx = 0
+        for node in path:
+            if self._is_placeholder(node):
                 continue
-            item_idx += 1
+            idx += 1
             payload = node.payload
-            status = "SUCCESS" if node.meta["result_status"] == ResultStatus.SUCCESS else "FAILURE"
-
-            text += f"[Existing Memory {item_idx}] (Status: {status})\n"
-            text += f"  Description: {payload['memory_description']}\n"
-            text += f"  Content: {payload.get('content_body', '')}\n\n"
-
+            is_success = node.meta["result_status"] == ResultStatus.SUCCESS
+            if is_task_tree:
+                if is_success:
+                    label = "Base Skill" if idx == 1 else f"Skill Patch {idx - 1}"
+                    text += f"[{label}] (✅ SUCCESS)\n"
+                    text += f"  Activation: {payload['activation_condition']}\n"
+                    if payload.get("trajectory"):
+                        traj_preview = payload["trajectory"].replace("\\n", "\n")
+                        text += f"  Reference Trajectory:\n{traj_preview[:800]}\n"
+                        if len(payload["trajectory"]) > 800:
+                            text += "  ...[truncated]\n"
+                    text += f"  Key Tip: {payload['execution_procedure']}\n"
+                    if payload.get("termination_condition"):
+                        text += f"  Termination: {payload['termination_condition']}\n"
+                else:
+                    label = "Base Failure Record" if idx == 1 else f"Failure Record {idx - 1}"
+                    text += f"[{label}] (⛔ FAILURE — what went wrong, not a solution)\n"
+                    text += f"  When this failure occurred: {payload['activation_condition']}\n"
+                    text += f"  What failed / What was not tried: {payload['execution_procedure']}\n"
+            else:
+                label = "Base Environment Knowledge" if idx == 1 else f"Environment Knowledge Update {idx - 1}"
+                text += f"[{label}]\n"
+                text += f"  Applicable scenario: {payload['activation_condition']}\n"
+                text += f"  Layout & operation rules: {payload['execution_procedure']}\n"
+                if payload.get("termination_condition"):
+                    text += f"  Navigation complete when: {payload['termination_condition']}\n"
+            text += "\n"
         return text
+
+    def render_task_path_for_reflection(self, task_path: List[MemoryNode]) -> str:
+        return self._render_path_for_reflection(task_path, is_task_tree=True)
 
     def render_env_path_for_reflection(self, env_path: List[MemoryNode]) -> str:
-        if self._is_empty_path(env_path):
-            return ""
-
-        text = ""
-        item_idx = 0
-        for node in env_path:
-            if "GLOBAL_ROOT_PLACEHOLDER" in node.payload.get("scenario_description", ""):
-                continue
-            item_idx += 1
-            payload = node.payload
-            status = "SUCCESS" if node.meta["result_status"] == ResultStatus.SUCCESS else "FAILURE"
-
-            text += f"[Existing Memory {item_idx}] (Status: {status})\n"
-            text += f"  Description: {payload['memory_description']}\n"
-            text += f"  Content: {payload.get('content_body', '')}\n\n"
-
-        return text
+        return self._render_path_for_reflection(env_path, is_task_tree=False)

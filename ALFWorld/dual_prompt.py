@@ -1,19 +1,20 @@
 """
-Dual PR-Tree Prompt Templates (v7.0)
+Dual PR-Tree Prompt Templates for ALFWorld (v11.0 - Lean)
 
-v7.0 核心改进:
-1. 环境经验扩展: 不仅是静态物品位置mapping，还包括「在该环境下高效完成任务的操作套路」
-2. 残差经验严格差异化: 给出前序经验的完整 description+body 供对比，明确要求不得重复
-3. scenario description 给完整: 所有 prompt 统一提供 env_description + task_description
+设计原则:
+- Root: 冷启动，从轨迹提取完整自包含 skill/knowledge
+- Node: 增量，只提取与已有记忆不同的最小 delta
+- Failure: 记录陷阱，不是可执行步骤
+- 不用 Rules 列表，直接在字段描述里说清要求
 """
 
 # =================================================================
 # 基础 ALFWorld Instruction
 # =================================================================
 
-alfworld_instruction = """Interact with a household to solve a task. Imagine you are an intelligent agent in a household environment and your target is to perform actions to complete the task goal. At the beginning of your interactions, you will be given the detailed description of the current environment and your goal to accomplish. 
+alfworld_instruction = """Interact with a household to solve a task. Imagine you are an intelligent agent in a household environment and your target is to perform actions to complete the task goal. At the beginning of your interactions, you will be given the detailed description of the current environment and your goal to accomplish.
 For each of your turn, you will be given the observation of the last turn. You should choose from two actions: "Thought" or "Action". If you choose "Thought", you should first think about the current condition and plan for your future actions, and then output your action in this turn. Your output must strictly follow this format:"Thought: your thoughts.
- Action: your next action"; If you choose "Action", you should directly output the action in this turn. Your output must strictly follow this format:"Action: your next action". 
+ Action: your next action"; If you choose "Action", you should directly output the action in this turn. Your output must strictly follow this format:"Action: your next action".
 The available actions are:
 1. go to {recep}
 2. take {obj} from {recep}
@@ -26,7 +27,7 @@ The available actions are:
 9. cool {obj} with {recep}
 where {obj} and {recep} correspond to objects and receptacles.
 After your each turn, the environment will give you immediate feedback based on which you plan your next few steps. if the envrionment output "Nothing happened", that means the previous action is invalid and you should try more options.
-Reminder: 
+Reminder:
 1. The action must be chosen from the given available actions. Any actions except provided available actions will be regarded as illegal.
 2. Think when necessary, try to act directly more in the process.
 """
@@ -53,7 +54,7 @@ Here is an example for a complete task trajectory.
 {examples}
 ---
 
-The following relevant experiences may help you complete the task:
+{memory_header}
 
 {memory_context}
 
@@ -61,359 +62,196 @@ Now, it's your turn and here is the task.
 {task}
 """
 
+MEMORY_HEADERS: dict = {
+    "prtree": (
+        "Retrieved from your hierarchical memory system:\n"
+        "• Task Skill Memory — HOW to solve this task type (Base Skill + Skill Deltas as patches)\n"
+        "• Environment Knowledge Memory — WHERE objects are and HOW to operate receptacles/appliances\n"
+        "Note: 'Trigger'/'Applicable scenario' labels describe PAST episodes — your actual task is at the end."
+    ),
+    "synapse": (
+        "The following past task trajectories are retrieved from memory as few-shot examples. "
+        "Use them as reference if the task pattern is similar to the current one:"
+    ),
+    "awm": (
+        "The following workflow procedure was distilled from past similar household tasks. "
+        "Follow it as a step-by-step guide if the task type matches:"
+    ),
+    "reasoningbank": (
+        "The following memory items are distilled lessons from past household task interactions. "
+        "[✅ SUCCESS] entries describe strategies that worked; "
+        "[⚠️ FAILURE] entries highlight mistakes to avoid. "
+        "Apply the relevant insights to guide your actions:"
+    ),
+}
+
 
 # =================================================================
-# 任务树反思 Prompt
+# 任务树反思 Prompt (Task Tree)
 # =================================================================
 
 TaskTree_Prompt_Map = {}
 
-TaskTree_Prompt_Map['root_success'] = """You have successfully completed a household task.
-Your job: Extract a **general task workflow strategy** that helps future agents solve similar task types.
+TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Extract a reusable Base Skill from this successful trajectory.
 
-**Focus on TASK STRATEGY — the general workflow applicable across different environments:**
-- What type of task is this? (e.g., heat-then-place, cool-then-place, pick-clean-then-place, etc.)
-- What is the correct step-by-step action sequence?
-- What critical action syntax or rules must be followed? (e.g., must you hold the object to use 'heat X with Y'?)
-- What decision points, preconditions, or common pitfalls exist?
-
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Result: SUCCESS ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Mention the task type explicitly (e.g., "for tasks requiring heating an object and placing it somewhere").
-3. Include specific action syntax rules where relevant (e.g., "use 'heat X with microwave' while holding X in hand").
-4. Be concrete and actionable — include step-by-step instructions with decision points and pitfalls.
+Output a self-contained Base Skill — future agents have NO access to this trajectory:
+- `activation_condition`: In plain natural language, describe when this skill applies and what distinguishes it from other tasks.
+- `execution_procedure`: Concrete step sequence derived from this trajectory. Write out each individual action — do not collapse multi-step operations into a single abstract phrase.
+- `termination_condition`: When the skill is complete.
 
-**Output (JSON):**
-1. "memory_description": One sentence summarizing the task type and key strategy insight.
-   Example: "For heat-then-place tasks, you must hold the object in hand when using 'heat X with microwave' — do not put it inside first."
-2. "content_body": Self-contained, step-by-step workflow for this task type with action syntax, decision points, and pitfall warnings.
-
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-TaskTree_Prompt_Map['root_failure'] = """You attempted a household task but FAILED.
-Your job: Generate a **corrective task strategy** so future agents avoid the same mistake.
+TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This is a FAILURE RECORD — NOT a skill to execute. Future agents will see a ⛔ warning with this.
 
-**Focus on TASK STRATEGY — what went wrong in the workflow logic:**
-- What type of task is this?
-- What was the wrong action, missing step, or incorrect action syntax?
-- What is the correct workflow?
-
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
+Task: {task_description}
+Result: FAILURE ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Mention the task type explicitly (e.g., "for tasks requiring heating an object and placing it somewhere").
-3. Include specific action syntax rules where relevant (e.g., "use 'heat X with microwave' while holding X in hand").
-4. Be concrete and actionable — include step-by-step instructions with decision points and pitfalls.
+- `activation_condition`: In plain natural language, describe what task situation this applies to and what wrong assumption caused the failure.
+- `execution_procedure`:
+  [FAILED]: Actions tried and environment responses showing they failed.
+  [UNEXPLORED]: Plausible approaches never attempted.
+- `termination_condition`: Leave empty string.
 
-**Output (JSON):**
-1. "memory_description": One sentence: task type + what went wrong + how to fix it.
-2. "content_body": Self-contained corrective guide with correct action sequence and syntax.
-
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
-TaskTree_Prompt_Map['node_success'] = """You successfully completed a household task. There are existing task strategy memories stored.
-Your job: identify what **NEW strategic insight** this experience adds that is NOT already covered.
+TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract ONLY the minimal new patch not covered by existing skills.
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING SKILL MEMORIES ===
 {retrieved_task_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Result: SUCCESS ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing memories above carefully. List (mentally) what they already cover.
-2. ANALYZE the current trajectory. Find knowledge that is genuinely NEW:
-   - A different action syntax rule not mentioned in existing memories
-   - An edge case or failure-recovery pattern not covered
-   - A more efficient workflow variant
-   - A new precondition or verification step
-3. Your output MUST contain ONLY the new incremental knowledge.
-   DO NOT repeat, rephrase, or summarize anything from the existing memories.
-4. If you find yourself writing something similar to an existing memory, STOP and think of what is truly different.
+Output {{"skip": true}} ONLY if you can satisfy ALL of the following, with direct evidence:
+1. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
+2. No action in this trajectory required a recovery step, a different object category, or a procedural order not covered by that quoted text.
+If you cannot quote matching text for even ONE action in this trajectory, you MUST write a delta.
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Mention the task type explicitly (e.g., "for tasks requiring heating an object and placing it somewhere").
-3. Include specific action syntax rules where relevant (e.g., "use 'heat X with microwave' while holding X in hand").
-4. Be concrete and actionable — include step-by-step instructions with decision points and pitfalls.
+Otherwise, output the smallest delta (1-3 new observations max):
+- `activation_condition`: In plain natural language, describe the specific new condition or variant that makes this delta necessary — must differ from existing triggers.
+- `execution_procedure`: New steps only, concrete and self-contained.
+- `termination_condition`: When this delta is done.
 
-**Output (JSON):**
-1. "memory_description": One sentence about the NEW insight only. Must clearly differ from all existing memory descriptions.
-2. "content_body": Self-contained new advice. Readable without the existing memories.
-
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-TaskTree_Prompt_Map['node_failure'] = """You attempted a household task but FAILED despite existing task strategy memories.
-Your job: identify the **specific gap** in existing strategies that caused the failure.
+TaskTree_Prompt_Map['node_failure'] = """You are a Failure Recorder. Record the gap in existing skills that caused this failure.
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING SKILL MEMORIES ===
 {retrieved_task_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
+Task: {task_description}
+Result: FAILURE ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing memories. What strategies do they recommend?
-2. ANALYZE the failure. At which step did things go wrong? Why didn't existing strategies prevent it?
-3. Identify the SPECIFIC gap — what rule, edge case, or situation is NOT covered?
-4. Your output MUST contain ONLY the gap-filling correction.
-   DO NOT repeat, rephrase, or summarize anything from the existing memories.
+Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and the exact environment responses from that record that match this trajectory. If the failed action sequence or environment response differs in any way, you MUST write a new record.
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Mention the task type explicitly (e.g., "for tasks requiring heating an object and placing it somewhere").
-3. Include specific action syntax rules where relevant (e.g., "use 'heat X with microwave' while holding X in hand").
-4. Be concrete and actionable — include step-by-step instructions with decision points and pitfalls.
+Otherwise, output the gap as a trap record:
+- `activation_condition`: In plain natural language, describe the specific situation that existing skills failed to handle.
+- `execution_procedure`:
+  [FAILED]: What was tried and why it failed.
+  [UNEXPLORED]: Approaches never attempted.
+- `termination_condition`: Leave empty string.
 
-**Output (JSON):**
-1. "memory_description": One sentence: the specific gap and correction. Must differ from existing descriptions.
-2. "content_body": Self-contained corrective rule. Readable without the existing memories.
-
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
 
 # =================================================================
-# 环境树反思 Prompt
+# 环境树反思 Prompt (Env Tree)
 # =================================================================
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You completed a task in a household environment.
-Your job: Extract **environment-adaptive knowledge** — practical knowledge for operating in this type of environment.
+EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative facts about this household environment from the trajectory — regardless of whether the task succeeded or failed, the environmental observations are valid knowledge.
 
-**Your output should cover TWO aspects:**
-
-A) **Environment Layout Knowledge:**
-   - What type of environment is this? (kitchen, bathroom, bedroom, etc.)
-   - What receptacles are present? Which are open surfaces vs. closed containers?
-   - Where were specific objects found? (object-location patterns)
-   - What is the efficient search order for finding objects in this environment?
-
-B) **Environment-Specific Operation Rules (IMPORTANT — this is what makes your output valuable):**
-   Based on the trajectory, extract operational rules that are specific to how this environment works:
-   - How do appliances work in this environment? (e.g., 'to heat with microwave: hold object in hand, go to microwave, use "heat X with microwave" — do NOT put the object inside first')
-   - Which receptacles must be opened before interaction? (e.g., fridge, cabinets must be opened; countertops are open)
-   - What interaction pitfalls were encountered? (e.g., 'if you put an object inside a container and try to interact from another location, you must "go to" the container first')
-   - What is the efficient workflow pattern for this environment type?
-
-**Full Scenario:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Outcome: {result} ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent in a SIMILAR environment.
-That future agent will NOT see the current environment description, trajectory, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Describe the environment type explicitly (e.g., "in kitchen environments with 10+ cabinets, a fridge, countertops, and a microwave").
-3. Include BOTH:
-   a) Object-location patterns (where things are typically found)
-   b) Environment-specific operation rules and pitfalls (e.g., "to heat an object with a microwave, you must hold the object in hand and use 'heat X with microwave' — do NOT put the object inside the microwave first, or it will fail with 'Nothing happens'")
-4. Be concrete: mention specific receptacle types, interaction rules, and search priorities.
+Output self-contained Base Environment Knowledge — FACTS about the world, not a procedure:
+- `activation_condition`: "Applicable in [environment_type] environments where ..." — key structural features.
+- `execution_procedure`: CATEGORY-LEVEL patterns only — (A) what TYPES of objects tend to be in what TYPES of locations (e.g., "condiment-type objects tend to be on countertops or in kitchen drawers"), (B) how receptacle/appliance types behave, (C) pitfalls observed. Write as observations ("X-type objects tend to be on Y"), not commands. ⚠️ Do NOT record specific instances (e.g., "cabinet 3 had saltshaker 1") — ALFWorld randomizes object placement each episode, making specific locations immediately stale. Focus on generalizable object-category → location-type tendencies.
+- `termination_condition`: When this knowledge has been fully applied.
 
-**Output (JSON):**
-1. "memory_description": One sentence: environment type + the most important operational insight.
-   Example: "In kitchen environments with a microwave, you must hold an object in hand to heat it — putting it inside the microwave first causes failure."
-2. "content_body": Self-contained environment knowledge covering BOTH layout patterns AND operation rules/pitfalls.
-
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "Applicable in [environment_type] environments where ...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-EnvTree_Prompt_Map['root_failure'] = """You attempted a task in a household environment but FAILED.
-Your job: Extract **environment-adaptive warnings** — what environmental factors caused the failure.
+EnvTree_Prompt_Map['node'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge — regardless of whether the task succeeded or failed.
 
-**Your output should cover TWO aspects:**
-
-A) **Environment Layout Pitfalls:**
-   - Were objects not where expected?
-   - Were receptacles in unexpected states (closed when expected open, etc.)?
-
-B) **Environment-Specific Interaction Traps:**
-   - What actions failed because of how this environment works?
-   - What is the correct way to interact with appliances/receptacles in this environment?
-   - What operation rules were violated?
-
-**Full Scenario:**
-Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
-
-Trajectory:
-{trajectory}
-
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent in a SIMILAR environment.
-That future agent will NOT see the current environment description, trajectory, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Describe the environment type explicitly (e.g., "in kitchen environments with 10+ cabinets, a fridge, countertops, and a microwave").
-3. Include BOTH:
-   a) Object-location patterns (where things are typically found)
-   b) Environment-specific operation rules and pitfalls
-4. Be concrete: mention specific receptacle types, interaction rules, and search priorities.
-
-**Output (JSON):**
-1. "memory_description": One sentence: environment type + the key environmental pitfall.
-2. "content_body": Self-contained environment warning covering BOTH layout issues AND interaction traps.
-
-{{
-    "memory_description": "string",
-    "content_body": "string"
-}}
-"""
-
-EnvTree_Prompt_Map['node_success'] = """You completed a task in a household environment. There are existing environment knowledge memories stored.
-Your job: identify what **NEW environment-adaptive knowledge** this experience adds that is NOT already covered.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING ENVIRONMENT KNOWLEDGE ===
 {retrieved_env_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
 Environment: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps})
+Task: {task_description}
+Outcome: {result} ({steps}/{max_steps} steps)
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing environment memories carefully. List what layout patterns and operation rules they already cover.
-2. ANALYZE the current trajectory. Find genuinely NEW environment knowledge:
-   - New object-location mappings not previously recorded
-   - New receptacle interaction rules or pitfalls discovered
-   - New operational patterns for this environment type (e.g., a workflow shortcut)
-   - New search priority insights
-3. Your output MUST contain ONLY the new incremental knowledge.
-   DO NOT repeat, rephrase, or summarize anything from the existing memories.
-4. Remember to include both layout knowledge AND operational tips if the trajectory reveals new ones.
+Output {{"skip": true}} ONLY when EVERY specific object location AND EVERY appliance/receptacle interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. Each new trajectory visits different rooms and finds objects in specific spots — if even ONE location or rule is not explicitly in the existing knowledge, you MUST write an update.
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent in a SIMILAR environment.
-That future agent will NOT see the current environment description, trajectory, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Describe the environment type explicitly (e.g., "in kitchen environments with 10+ cabinets, a fridge, countertops, and a microwave").
-3. Include BOTH:
-   a) Object-location patterns (where things are typically found)
-   b) Environment-specific operation rules and pitfalls
-4. Be concrete: mention specific receptacle types, interaction rules, and search priorities.
+Otherwise, output the smallest new update (1-3 new facts max):
+- `activation_condition`: "Applicable in [environment_type] environments where ..." — the new structural feature.
+- `execution_procedure`: CATEGORY-LEVEL patterns only — new object-type → location-type tendencies or new appliance behavior rules not in existing knowledge. Write as observations ("X-type objects tend to be on Y"), not commands. ⚠️ Do NOT record specific instances (e.g., "cabinet 3 had saltshaker 1") — ALFWorld randomizes object placement each episode, making specific locations immediately stale.
+- `termination_condition`: When this adaptation is complete.
 
-**Output (JSON):**
-1. "memory_description": One sentence about the NEW insight only. Must clearly differ from all existing memory descriptions.
-2. "content_body": Self-contained new environment knowledge. Readable without the existing memories.
-
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
-}}
-"""
-
-EnvTree_Prompt_Map['node_failure'] = """You attempted a task in a household environment but FAILED despite existing environment knowledge.
-Your job: identify what **environment knowledge gap** caused the failure.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT any of this) ===
-{retrieved_env_memory}
-=== END OF EXISTING MEMORIES ===
-
-**Current Experience:**
-Environment: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps})
-
-Trajectory:
-{trajectory}
-
-**Residual Generation Instructions:**
-1. READ the existing environment memories. What do they know about this environment type?
-2. ANALYZE the failure. Was it caused by:
-   - Wrong assumption about object locations?
-   - Missed receptacle interaction rule?
-   - An environment-specific action pitfall not previously recorded?
-3. Identify the SPECIFIC environment gap not covered by existing memories.
-4. Your output MUST contain ONLY the gap-filling knowledge.
-   DO NOT repeat, rephrase, or summarize anything from the existing memories.
-
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent in a SIMILAR environment.
-That future agent will NOT see the current environment description, trajectory, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Describe the environment type explicitly (e.g., "in kitchen environments with 10+ cabinets, a fridge, countertops, and a microwave").
-3. Include BOTH:
-   a) Object-location patterns (where things are typically found)
-   b) Environment-specific operation rules and pitfalls
-4. Be concrete: mention specific receptacle types, interaction rules, and search priorities.
-
-**Output (JSON):**
-1. "memory_description": One sentence: the specific environment gap. Must differ from existing descriptions.
-2. "content_body": Self-contained environment correction. Readable without the existing memories.
-
-{{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "Applicable in [environment_type] environments where ...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
@@ -428,8 +266,5 @@ def get_task_prompt_key(is_root: bool, is_success: bool) -> str:
     else:
         return "node_success" if is_success else "node_failure"
 
-def get_env_prompt_key(is_root: bool, is_success: bool) -> str:
-    if is_root:
-        return "root_success" if is_success else "root_failure"
-    else:
-        return "node_success" if is_success else "node_failure"
+def get_env_prompt_key(is_root: bool, is_success: bool = True) -> str:
+    return "root" if is_root else "node"

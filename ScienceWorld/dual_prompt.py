@@ -1,10 +1,11 @@
 """
-Dual PR-Tree Prompt Templates for ScienceWorld (v1.0)
+Dual PR-Tree Prompt Templates for ScienceWorld (v3.0)
 
-针对 ScienceWorld 的双树 Prompt 模板：
-- ScienceWorld 是一个科学实验环境，需要完成各种科学任务
-- 任务树：存储特定科学任务的操作流程策略（如沸腾、融化、混合化学品等）
-- 环境树：存储场景导航经验（各房间的物品分布、设备位置等）
+v3.0 改进:
+- Env tree: 允许记录具体房间→物品映射（ScienceWorld 房间固定，不像 ALFWorld 随机）
+- Task tree: 格式对齐 ALFWorld lean 风格；强调 ScienceWorld 特有动作语法
+- node_success skip 规则：新增 partial reward 约束
+- Memory header：更具体描述 ScienceWorld 双树内容
 """
 
 # =================================================================
@@ -45,6 +46,7 @@ wait1: task no action for a step
 # =================================================================
 
 PROMPT_WITH_ICL_TEMPLATE = """{instruction}
+---
 Here is an example for a complete task trajectory.
 
 {examples}
@@ -55,18 +57,42 @@ Now, it's your turn and here is the task.
 """
 
 PROMPT_WITH_ICL_TEMPLATE_DUAL_MEMORY = """{instruction}
+---
 Here is an example for a complete task trajectory.
 
 {examples}
 ---
 
-The following relevant experiences may help you complete the task:
+{memory_header}
 
 {memory_context}
 
 Now, it's your turn and here is the task.
 {task}
 """
+
+MEMORY_HEADERS: dict = {
+    "prtree": (
+        "Retrieved from your hierarchical memory system:\n"
+        "• Task Skill Memory — HOW to perform this science task type: exact action sequence, which room to find each item, device operation syntax (use/activate/connect), and what to watch out for.\n"
+        "• Environment Knowledge Memory — WHERE specific items are located across ScienceWorld rooms, and HOW devices/equipment respond to actions.\n"
+        "Note: 'Trigger'/'Applicable scenario' labels describe PAST episodes — your actual task is at the end."
+    ),
+    "synapse": (
+        "The following past experiment trajectories are retrieved from memory as few-shot examples. "
+        "Use them as reference if the experimental pattern is similar to the current one:"
+    ),
+    "awm": (
+        "The following workflow procedure was distilled from past similar science experiments. "
+        "Follow it as a step-by-step guide if the experiment type matches:"
+    ),
+    "reasoningbank": (
+        "The following memory items are distilled lessons from past science experiment interactions. "
+        "[✅ SUCCESS] entries describe experimental strategies that worked; "
+        "[⚠️ FAILURE] entries highlight mistakes to avoid. "
+        "Apply the relevant insights to guide your experiment:"
+    ),
+}
 
 
 # =================================================================
@@ -75,154 +101,112 @@ Now, it's your turn and here is the task.
 
 TaskTree_Prompt_Map = {}
 
-TaskTree_Prompt_Map['root_success'] = """You have successfully completed a scientific experiment task.
-Your job: Extract a **general task workflow strategy** that helps future agents solve similar science tasks.
+TaskTree_Prompt_Map['root_success'] = """You are a Skill Extractor. Extract a reusable Base Skill from this successful science experiment trajectory.
 
-**Focus on TASK STRATEGY — the general workflow applicable across different environments:**
-- What type of scientific task is this? (e.g., boiling, melting, freezing, chemistry mixing, measuring, testing conductivity, finding living things, growing plants, etc.)
-- What is the correct step-by-step action sequence?
-- What critical action syntax or rules must be followed?
-- What scientific knowledge or decision points are involved?
-
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar science task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own — no references to "the above", "the retrieved memory", etc.
-2. Mention the science task type explicitly (e.g., "for tasks requiring boiling water").
-3. Include specific action syntax rules where relevant.
-4. Be concrete and actionable — include step-by-step instructions with decision points and pitfalls.
+Output a self-contained Base Skill — future agents have NO access to this trajectory:
+- `activation_condition`: The science task TYPE and distinguishing features (e.g., "boiling tasks where the goal is to heat a liquid until it reaches its boiling point, requiring a heat source and thermometer").
+- `execution_procedure`: Concrete step-by-step procedure derived from this trajectory. Write out each action individually using exact ScienceWorld syntax (teleport to LOC / pick up OBJ / use OBJ on OBJ / focus on OBJ / pour OBJ into OBJ / mix OBJ / activate OBJ / connect OBJ to OBJ). Include: (1) which room each item is found in, (2) the full action sequence in order, (3) any critical preconditions or pitfalls.
+- `termination_condition`: When the skill is complete (e.g., reward > 0 confirmed / target substance reached required state).
 
-**Output (JSON):**
-1. "memory_description": One sentence summarizing the task type and key strategy insight.
-2. "content_body": Self-contained, step-by-step workflow for this science task type with action syntax, decision points, and pitfall warnings.
-
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-TaskTree_Prompt_Map['root_failure'] = """You attempted a scientific experiment task but FAILED.
-Your job: Generate a **corrective task strategy** so future agents avoid the same mistake.
+TaskTree_Prompt_Map['root_failure'] = """You are a Failure Recorder. This is a FAILURE RECORD — NOT a skill to execute. Future agents will see a ⛔ warning with this.
 
-**Focus on TASK STRATEGY — what went wrong in the workflow logic:**
-- What type of scientific task is this?
-- What was the wrong action, missing step, or incorrect action syntax?
-- What is the correct workflow based on scientific principles?
-
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed in correct order before failure.
+Note: Reward > 0 means some sub-goals were completed correctly before failure.
 
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent on a DIFFERENT but similar science task.
-That future agent will NOT see the current trajectory, environment, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Mention the science task type explicitly.
-3. Include specific action syntax rules where relevant.
-4. Be concrete and actionable. If reward > 0, analyze which sub-goals were completed and where the breakdown occurred.
+- `activation_condition`: Task type + the specific wrong assumption or failure condition that caused this outcome.
+- `execution_procedure`:
+  [FAILED]: Actions attempted and exact environment responses showing failure. If reward > 0, identify which sub-goals succeeded before breakdown.
+  [UNEXPLORED]: Plausible approaches this agent never attempted.
+- `termination_condition`: Leave empty string.
 
-**Output (JSON):**
-1. "memory_description": One sentence: task type + what went wrong + how to fix it.
-2. "content_body": Self-contained corrective guide with correct action sequence and syntax.
-
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
-TaskTree_Prompt_Map['node_success'] = """You successfully completed a scientific task. There are existing task strategy memories stored.
-Your job: identify what **NEW strategic insight** this experience adds that is NOT already covered.
+TaskTree_Prompt_Map['node_success'] = """You are a Skill Delta Extractor. Extract ONLY the minimal new patch not covered by existing skills.
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {retrieved_task_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing memories carefully. List what they already cover.
-2. ANALYZE the current trajectory. Find genuinely NEW knowledge:
-   - A different action syntax rule not mentioned
-   - An edge case or failure-recovery pattern not covered
-   - A more efficient workflow variant
-   - A new scientific principle or precondition
-3. Your output MUST contain ONLY the new incremental knowledge.
-   DO NOT repeat, rephrase, or summarize anything from existing memories.
+Output {{"skip": true}} ONLY if you can satisfy ALL of the following with direct evidence:
+1. Reward is 1.0 (full success — partial reward means a sub-goal was missed, which requires a delta).
+2. Identify ONE existing skill whose execution_procedure explicitly lists every distinct action type performed in this trajectory — quote the exact phrase from that skill for each action.
+3. No action in this trajectory required a recovery step, a different item, or a procedural order not covered by that quoted text.
+If ANY condition fails, you MUST write a delta.
 
-**CRITICAL: Self-Contained Output**
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Mention the science task type explicitly.
-3. Be concrete and actionable.
+Otherwise, output the smallest delta (1-3 new observations max):
+- `activation_condition`: The SPECIFIC NEW condition that activates this delta — must differ from existing triggers.
+- `execution_procedure`: NEW steps/rules only. Concrete and self-contained, using exact ScienceWorld action syntax.
+- `termination_condition`: When this delta modification is complete.
 
-**Output (JSON):**
-1. "memory_description": One sentence about the NEW insight only.
-2. "content_body": Self-contained new advice.
-
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-TaskTree_Prompt_Map['node_failure'] = """You attempted a scientific task but FAILED despite existing task strategy memories.
-Your job: identify the **specific gap** in existing strategies that caused the failure.
+TaskTree_Prompt_Map['node_failure'] = """You are a Failure Recorder. Record the gap in existing skills that caused this failure.
 
-=== EXISTING TASK MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING TASK SKILL MEMORIES (already stored — DO NOT REPEAT) ===
 {retrieved_task_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
+Environment: {env_description}
+Task: {task_description}
 Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed in correct order before failure.
+Note: Reward > 0 means some sub-goals were completed correctly before failure.
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing memories. What strategies do they recommend?
-2. ANALYZE the failure. At which step did things go wrong? If reward > 0, identify which sub-goals succeeded and where the breakdown occurred.
-3. Identify the SPECIFIC gap — what rule, edge case, or scientific principle is NOT covered?
-4. Your output MUST contain ONLY the gap-filling correction.
+Output {{"skip": true}} ONLY if an existing failure record describes the EXACT SAME failure: you must quote the specific failed actions and exact environment responses from that record matching this trajectory. If the failed action sequence or environment response differs in any way, write a new record.
 
-**CRITICAL: Self-Contained Output**
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Mention the science task type explicitly.
-3. Be concrete and actionable.
+Otherwise, output the gap as a trap record:
+- `activation_condition`: The specific situation existing skills failed to handle.
+- `execution_procedure`:
+  [FAILED]: Actions attempted and exact environment responses. Note which existing skill guidance was followed but did not work. If reward > 0, identify which sub-goals succeeded before breakdown.
+  [UNEXPLORED]: Plausible approaches this agent never attempted.
+- `termination_condition`: Leave empty string.
 
-**Output (JSON):**
-1. "memory_description": One sentence: the specific gap and correction.
-2. "content_body": Self-contained corrective rule.
-
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "...",
+    "execution_procedure": "[FAILED]: ...\n[UNEXPLORED]: ...",
+    "termination_condition": ""
 }}
 """
 
@@ -230,171 +214,65 @@ Rules:
 # =================================================================
 # 环境树反思 Prompt（ScienceWorld 版）
 # =================================================================
+#
+# 关键设计原则：ScienceWorld 的房间结构是固定的（kitchen / workshop / greenhouse 等），
+# 物品位置跨 episode 基本一致（不像 ALFWorld 每次随机摆放）。
+# 因此 env tree 应记录具体的 房间→物品 映射，而非 ALFWorld 式的类目归纳。
 
 EnvTree_Prompt_Map = {}
 
-EnvTree_Prompt_Map['root_success'] = """You completed a scientific task in a ScienceWorld environment.
-Your job: Extract **environment-adaptive knowledge** — practical knowledge for navigating and operating in this type of environment.
+EnvTree_Prompt_Map['root'] = """You are an Environment Knowledge Extractor. Extract declarative facts about this ScienceWorld environment from the trajectory — regardless of task outcome, the observations are valid knowledge.
 
-**Your output should cover TWO aspects:**
+Environment: {env_description}
+Task: {task_description}
+Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
-A) **Environment Layout Knowledge:**
-   - What rooms are present and what items/equipment are in each?
-   - Where were specific items found? (item-room patterns)
-   - What is the efficient search order for finding items needed for science tasks?
-
-B) **Environment-Specific Operation Rules (IMPORTANT):**
-   - How do specific devices work in this environment? (e.g., thermometer, bunsen burner, electrical components)
-   - What interaction pitfalls were encountered?
-   - What is the efficient workflow pattern for operating in this environment?
-
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
-
-Trajectory:
 {trajectory}
 
-**CRITICAL: Self-Contained Output**
-Your output will be stored and later shown to a future agent in a SIMILAR environment.
-That future agent will NOT see the current environment description, trajectory, or any memory chain.
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Describe the environment type explicitly (e.g., "in a ScienceWorld environment with a kitchen, greenhouse, and workshop").
-3. Include BOTH:
-   a) Item-location patterns (where things are typically found)
-   b) Environment-specific operation rules and pitfalls
-4. Be concrete: mention specific rooms, device interaction rules, and search priorities.
+Output self-contained Base Environment Knowledge — FACTS about the world, not a procedure to execute.
 
-**Output (JSON):**
-1. "memory_description": One sentence: environment type + the most important operational insight.
-2. "content_body": Self-contained environment knowledge covering BOTH layout patterns AND operation rules/pitfalls.
+Important: Unlike ALFWorld, ScienceWorld rooms have CONSISTENT item placement across episodes. Record SPECIFIC room→item mappings (e.g., "the thermometer is in the kitchen"), not just category-level tendencies.
 
+- `activation_condition`: "Applicable in ScienceWorld environments where ..." — describe the task context or room configuration.
+- `execution_procedure`: Factual observations: (A) specific item locations by room (e.g., "thermometer: kitchen", "battery: workshop"), (B) device/equipment operation rules with exact action syntax (e.g., "use thermometer on OBJ to read temperature"), (C) efficient room search order for common items, (D) any pitfalls observed. Write as facts, not commands.
+- `termination_condition`: When this environment knowledge has been fully applied.
+
+Output ONLY the JSON:
 {{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "Applicable in ScienceWorld environments where ...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
-EnvTree_Prompt_Map['root_failure'] = """You attempted a scientific task in a ScienceWorld environment but FAILED.
-Your job: Extract **environment-adaptive warnings** — what environmental factors caused the failure.
+EnvTree_Prompt_Map['node'] = """You are an Environment Knowledge Extractor. Extract ONLY new environment facts not covered by existing knowledge — regardless of task outcome.
 
-**Your output should cover TWO aspects:**
-
-A) **Environment Layout Pitfalls:**
-   - Were items not where expected?
-   - Were devices in unexpected states?
-
-B) **Environment-Specific Interaction Traps:**
-   - What actions failed because of how this environment works?
-   - What is the correct way to interact with devices in this environment?
-
-**Full Scenario:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed in correct order before failure.
-
-Trajectory:
-{trajectory}
-
-**CRITICAL: Self-Contained Output**
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Describe the environment type explicitly.
-3. Include BOTH:
-   a) Item-location patterns
-   b) Environment-specific operation rules and pitfalls. If reward > 0, analyze which environment interactions succeeded and where the environment caused the failure.
-
-**Output (JSON):**
-1. "memory_description": One sentence: environment type + the key environmental pitfall.
-2. "content_body": Self-contained environment warning.
-
-{{
-    "memory_description": "string",
-    "content_body": "string"
-}}
-"""
-
-EnvTree_Prompt_Map['node_success'] = """You completed a scientific task in a ScienceWorld environment. There are existing environment knowledge memories stored.
-Your job: identify what **NEW environment-adaptive knowledge** this experience adds that is NOT already covered.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT any of this) ===
+=== EXISTING ENVIRONMENT KNOWLEDGE (already stored — DO NOT REPEAT) ===
 {retrieved_env_memory}
-=== END OF EXISTING MEMORIES ===
+=== END ===
 
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: SUCCESS (Steps: {steps}, Reward: {reward:.2f}/1.0)
+Environment: {env_description}
+Task: {task_description}
+Outcome: Steps={steps}, Reward={reward:.2f}/1.0
 
-Trajectory:
 {trajectory}
 
-**Residual Generation Instructions:**
-1. READ the existing environment memories carefully.
-2. ANALYZE the current trajectory. Find genuinely NEW environment knowledge:
-   - New item-location mappings not previously recorded
-   - New device interaction rules or pitfalls discovered
-   - New operational patterns for this environment
-3. Your output MUST contain ONLY the new incremental knowledge.
-   DO NOT repeat, rephrase, or summarize anything from existing memories.
+Important: ScienceWorld rooms have CONSISTENT item placement. Record specific room→item mappings when newly observed.
 
-**CRITICAL: Self-Contained Output**
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Describe the environment type explicitly.
-3. Be concrete: mention specific rooms, devices, and interaction rules.
+Output {{"skip": true}} ONLY when EVERY item location AND EVERY device/equipment interaction rule observed in this trajectory is already explicitly stated in the existing knowledge above. If even ONE specific location or device rule is not explicitly covered, you MUST write an update.
 
-**Output (JSON):**
-1. "memory_description": One sentence about the NEW insight only.
-2. "content_body": Self-contained new environment knowledge.
+Otherwise, output the smallest new update (1-3 new facts max):
+- `activation_condition`: "Applicable in ScienceWorld environments where ..." — the new context covered.
+- `execution_procedure`: NEW facts only — specific item locations or device rules not in existing knowledge. Written as facts, not commands.
+- `termination_condition`: When this environment adaptation is complete.
 
+Output ONLY one of these two JSON formats:
+{{"skip": true}}
+OR
 {{
-    "memory_description": "string",
-    "content_body": "string"
-}}
-"""
-
-EnvTree_Prompt_Map['node_failure'] = """You attempted a scientific task in a ScienceWorld environment but FAILED despite existing environment knowledge.
-Your job: identify what **environment knowledge gap** caused the failure.
-
-=== EXISTING ENVIRONMENT MEMORIES (already stored — DO NOT REPEAT any of this) ===
-{retrieved_env_memory}
-=== END OF EXISTING MEMORIES ===
-
-**Current Experience:**
-Environment Description: {env_description}
-Task Goal: {task_description}
-Result: FAILURE (Steps: {steps}, Reward: {reward:.2f}/1.0)
-Note: Reward > 0 means some sub-goals were completed in correct order before failure.
-
-Trajectory:
-{trajectory}
-
-**Residual Generation Instructions:**
-1. READ the existing environment memories.
-2. ANALYZE the failure. If reward > 0, identify which sub-goals succeeded in the environment before the failure. Was the remaining failure caused by:
-   - Wrong assumption about item locations?
-   - Missed device interaction rule?
-   - An environment-specific action pitfall not previously recorded?
-3. Identify the SPECIFIC gap not covered by existing memories.
-4. Your output MUST contain ONLY the gap-filling knowledge.
-
-**CRITICAL: Self-Contained Output**
-Rules:
-1. "content_body" must be fully understandable on its own.
-2. Describe the environment type explicitly.
-3. Be concrete.
-
-**Output (JSON):**
-1. "memory_description": One sentence: the specific environment gap.
-2. "content_body": Self-contained environment correction.
-
-{{
-    "memory_description": "string",
-    "content_body": "string"
+    "activation_condition": "Applicable in ScienceWorld environments where ...",
+    "execution_procedure": "...",
+    "termination_condition": "..."
 }}
 """
 
@@ -409,8 +287,5 @@ def get_task_prompt_key(is_root: bool, is_success: bool) -> str:
     else:
         return "node_success" if is_success else "node_failure"
 
-def get_env_prompt_key(is_root: bool, is_success: bool) -> str:
-    if is_root:
-        return "root_success" if is_success else "root_failure"
-    else:
-        return "node_success" if is_success else "node_failure"
+def get_env_prompt_key(is_root: bool, is_success: bool = True) -> str:
+    return "root" if is_root else "node"

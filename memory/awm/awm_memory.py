@@ -50,83 +50,93 @@ logger = logging.getLogger(__name__)
 # --- ALFWorld ---
 ALFWORLD_INDUCTION_INSTRUCTION = """\
 You are given a successful trajectory of an agent completing a household task.
-Your job is to extract a reusable workflow from this trajectory.
+Your job is to extract a SHORT, GENERAL, reusable workflow from this trajectory.
 
 Rules:
-1. Abstract concrete object names / locations into descriptive variable names like {object-name}, {target-location}.
-2. Keep the high-level action structure, removing irrelevant exploration steps.
-3. The workflow must have at least 2 steps.
-4. Output format:
+1. Abstract ALL concrete object names, IDs, and locations into variables like {object-name}, {target-location}.
+2. Keep ONLY the essential steps on the happy path. Remove all exploration, retries, and dead ends.
+3. The workflow must have at least 2 steps and AT MOST 8 steps.
+4. The "Given" description must be ONE sentence describing the task category, not listing specific objects.
+5. Use action forms exactly as they appear in the trajectory — do not invent or paraphrase.
+6. Output format:
 ## <workflow_name>
-Given <context description>, this workflow <what it does>.
+Given <one-sentence task category description>, this workflow <what it does>.
 Step 1: <action>
 Step 2: <action>
 ...
 
-Output ONLY the workflow block(s). Do not include any other text."""
+Output ONLY the workflow block. Do not include any other text."""
 
 ALFWORLD_MERGE_INSTRUCTION = """\
 You have an existing workflow and a new successful trajectory for the same task type.
-Merge them into a single, more complete workflow that covers both cases.
+Your job is to produce a CLEANER, MORE GENERAL workflow — not a longer one.
 
 Rules:
-1. Keep abstract variable names like {object-name}.
-2. If the new trajectory adds new steps or alternatives, incorporate them.
-3. Output format: same as existing workflow (## name, docstring, steps).
-4. Output ONLY the merged workflow block. Do not include any other text."""
+1. Abstract ALL concrete object names, IDs, and locations into variables like {object-name}, {target-location}.
+2. The merged workflow must be SHORTER or EQUAL in length to the existing one (AT MOST 8 steps).
+3. Generalize steps that differ between the existing workflow and the new trajectory into a single abstract step.
+   DO NOT add new steps for edge cases or alternatives — consolidate them into the existing steps.
+4. The "Given" description must be ONE sentence, not a list of all possible objects or locations.
+5. Use action forms exactly as they appear in the trajectory — do not invent or paraphrase.
+6. Output format: same as existing workflow (## name, one-sentence docstring, steps).
+7. Output ONLY the merged workflow block. Do not include any other text."""
 
 # --- ScienceWorld ---
 SCIWORLD_INDUCTION_INSTRUCTION = """\
 You are given a successful trajectory of an agent completing a science experiment task.
-Your job is to extract a reusable workflow from this trajectory.
+Your job is to extract a SHORT, GENERAL, reusable workflow from this trajectory.
 
 Rules:
 1. Abstract specific object names / measurements into variables like {object-name}, {target-value}.
-2. Keep the essential experimental procedure steps.
-3. The workflow must have at least 2 steps.
-4. Output format:
+2. Keep ONLY the essential experimental procedure steps (the happy path). Remove exploration and retries.
+3. The workflow must have at least 2 steps and AT MOST 8 steps.
+4. The "Given" description must be ONE sentence describing the experiment category.
+5. Output format:
 ## <workflow_name>
-Given <context description>, this workflow <what it does>.
+Given <one-sentence experiment category description>, this workflow <what it does>.
 Step 1: <action>
 Step 2: <action>
 ...
 
-Output ONLY the workflow block(s). Do not include any other text."""
+Output ONLY the workflow block. Do not include any other text."""
 
 SCIWORLD_MERGE_INSTRUCTION = """\
 You have an existing workflow and a new successful trajectory for the same science task type.
-Merge them into a single, more complete workflow.
+Your job is to produce a CLEANER, MORE GENERAL workflow — not a longer one.
 
 Rules:
 1. Keep abstract variable names.
-2. Incorporate new steps or alternatives from the new trajectory.
-3. Output format: same as existing workflow.
-4. Output ONLY the merged workflow block. Do not include any other text."""
+2. The merged workflow must be SHORTER or EQUAL in length to the existing one (AT MOST 8 steps).
+3. Generalize differing steps into a single abstract step. DO NOT add steps for edge cases.
+4. Output format: same as existing workflow.
+5. Output ONLY the merged workflow block. Do not include any other text."""
 
 # --- Mind2web ---
 MIND2WEB_INDUCTION_INSTRUCTION = """\
-Given a successful web navigation task trajectory, extract a reusable workflow.
+Given a successful web navigation task trajectory, extract a SHORT, GENERAL, reusable workflow.
 
 Rules:
-1. Abstract specific values (URLs, names, dates) into descriptive variables like {product-name}, {target-date}.
-2. Find the repeatable sub-sequence of actions.
-3. Each workflow must have at least 2 steps.
-4. Output format:
+1. Abstract specific values (URLs, names, dates) into variables like {product-name}, {target-date}.
+2. Keep ONLY the essential repeatable action sequence (the happy path). Remove dead ends and retries.
+3. The workflow must have at least 2 steps and AT MOST 8 steps.
+4. The "Given" description must be ONE sentence describing the task category.
+5. Output format:
 ## <workflow_name>
-Given <context>, this workflow <what it does>.
+Given <one-sentence task category description>, this workflow <what it does>.
 [element_type]  element_description -> ACTION: {variable}
 ...
 
-Output ONLY the workflow block(s). Do not include any other text."""
+Output ONLY the workflow block. Do not include any other text."""
 
 MIND2WEB_MERGE_INSTRUCTION = """\
 You have an existing workflow and a new successful web navigation trajectory for the same website.
-Merge them into a single, more comprehensive workflow.
+Your job is to produce a CLEANER, MORE GENERAL workflow — not a longer one.
 
 Rules:
 1. Keep abstract variable names.
-2. Add new action steps or branches from the new trajectory.
-3. Output ONLY the merged workflow block. Do not include any other text."""
+2. The merged workflow must be SHORTER or EQUAL in length to the existing one (AT MOST 8 steps).
+3. Generalize differing steps into a single abstract step. DO NOT add steps for edge cases.
+4. Output ONLY the merged workflow block. Do not include any other text."""
 
 INDUCTION_INSTRUCTIONS = {
     "alfworld":  ALFWORLD_INDUCTION_INSTRUCTION,
@@ -173,12 +183,15 @@ class AWMMemory:
         benchmark: str = "alfworld",
         induction_every: int = 1,
         max_workflow_tokens: int = 2000,
+        load_existing: bool = True,
+        allow_updates: bool = True,
     ):
         self.memory_path   = Path(memory_path)
         self.benchmark     = benchmark.lower()
         self.llm_client    = llm_client
         self.induction_every = induction_every
         self.max_workflow_tokens = max_workflow_tokens
+        self.allow_updates = allow_updates
         self._lock         = threading.Lock()
 
         # 每类任务的成功轨迹缓存（等待诱导）
@@ -190,10 +203,17 @@ class AWMMemory:
         self._wf_dir = self.memory_path / self.benchmark
         self._wf_dir.mkdir(parents=True, exist_ok=True)
 
-        # 加载已有 workflow 统计
         existing = list(self._wf_dir.glob("*.txt"))
-        logger.info(f"✅ AWMMemory initialized: benchmark={benchmark}, "
-                    f"path={self._wf_dir}, existing={len(existing)} workflow files")
+        if not load_existing and existing:
+            # 冷启动：清空旧 workflow 文件，本次 run 从零积累
+            for f in existing:
+                f.unlink()
+            logger.info(f"✅ AWMMemory initialized: benchmark={benchmark}, "
+                        f"path={self._wf_dir}, cleared {len(existing)} old workflow files (cold start)")
+        else:
+            logger.info(f"✅ AWMMemory initialized: benchmark={benchmark}, "
+                        f"path={self._wf_dir}, existing={len(existing)} workflow files"
+                        + (" (loaded)" if load_existing else " (fresh, no existing)"))
 
     # ----------------------------------------------------------
     # 公开接口
@@ -222,6 +242,8 @@ class AWMMemory:
         trajectory: List[str],
         success: bool,
     ) -> None:
+        if not self.allow_updates:
+            return
         """
         episode 结束后调用。
         - 若 success=False，丢弃轨迹（防止错误污染）。

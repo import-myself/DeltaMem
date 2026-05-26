@@ -1,209 +1,136 @@
 """
-Dual Memory Writer (v4.0)
-双树记忆写入器：分别向任务树和环境树写入经验
-
-设计:
-- 任务树写入: Workflow Schema / 策略残差 / 任务级别的反思
-- 环境树写入: 环境布局认知 / 物品位置经验 / 环境交互教训
-- 两棵树独立写入，各自维护自己的 Anchor 路径
+Dual Memory Writer
+双树记忆写入器：根据是否有已检索路径决定写 ROOT 还是 RESIDUAL，
+并维护 hit_count / episode_idx 元数据。
 """
 
-import re
 import logging
 from typing import Optional, Dict, Any, List, Union
 
-from .memory_node import MemoryNode, NodeType, ResultStatus
+from .memory_node import MemoryNode, ResultStatus
 from .dual_tree_manager import DualTreeMemory
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-_ELEMENT_ID_RE = re.compile(r'\[(\d+)\]')
-
-
-def _sanitize_content(content: str) -> str:
-    """移除 [数字] 格式的 Element ID，这些 ID 是 episode 独有的，跨 episode 无效"""
-    if not content:
-        return content
-    cleaned = _ELEMENT_ID_RE.sub('[<element_id>]', content)
-    if cleaned != content:
-        logger.warning(
-            "content_body 包含 Element ID（已自动移除）。"
-            "请检查反思 Prompt 是否有效禁止了 ID 输出。"
-        )
-    return cleaned
 
 
 class DualMemoryWriter:
-    """
-    双树记忆写入器
-    
-    职责:
-    1. 接收 Agent 执行后的原始数据 (拆分为 task 和 env 两组)
-    2. 分别确定两棵树的挂载点 (Anchor Node)
-    3. 分别调用 DualTreeMemory 完成写入
-    """
-
     def __init__(self, dual_memory: DualTreeMemory):
         self.dual_memory = dual_memory
 
-    def _determine_anchor(self, tree, retrieved_path: Optional[List[MemoryNode]]) -> MemoryNode:
-        """解析路径，找到最后一个有效的节点作为 Anchor"""
-        if not retrieved_path:
-            return tree.root
-
-        last_node = retrieved_path[-1]
-        if last_node.node_id in tree.node_index:
-            return last_node
-        else:
-            logger.warning(f"Anchor node {last_node.node_id[:8]} not found in tree. Fallback to Root.")
-            return tree.root
-
-    def _is_root_path(self, path: Optional[List[MemoryNode]], tree_name: str) -> bool:
-        """判断路径是否只命中了占位根（即 zero-shot）"""
+    def _is_root_path(self, path: Optional[List[MemoryNode]]) -> bool:
         if not path:
             return True
-        if len(path) == 1:
-            desc = path[0].payload.get("scenario_description", "")
-            if "GLOBAL_ROOT_PLACEHOLDER" in desc:
-                return True
+        if len(path) == 1 and "GLOBAL_ROOT_PLACEHOLDER" in path[0].payload.get("scenario_description", ""):
+            return True
         return False
 
-    # =====================================================================
-    # 任务树写入
-    # =====================================================================
+    def _valid_anchor(self, tree, path: Optional[List[MemoryNode]]) -> MemoryNode:
+        if not path:
+            return tree.root
+        last = path[-1]
+        if last.node_id in tree.node_index:
+            return last
+        logger.warning(f"Anchor {last.node_id[:8]} not in tree index, falling back to root.")
+        return tree.root
+
+    def _write(
+        self,
+        tree,
+        add_root_fn,
+        add_residual_fn,
+        scenario_description: str,
+        skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus],
+        retrieved_path: Optional[List[MemoryNode]],
+        tree_label: str,
+        episode_idx: int = -1,
+    ) -> MemoryNode:
+        if self._is_root_path(retrieved_path):
+            logger.info(f"[{tree_label}] Writing ROOT skill (cold start).")
+            node = add_root_fn(scenario_description=scenario_description, skill=skill, result_status=result_status)
+        else:
+            anchor = self._valid_anchor(tree, retrieved_path)
+            logger.info(f"[{tree_label}] Writing RESIDUAL under {anchor.node_id[:8]}.")
+            node = add_residual_fn(
+                anchor_node=anchor,
+                scenario_description=scenario_description,
+                skill=skill,
+                result_status=result_status,
+            )
+
+        node.meta["episode_idx"] = episode_idx
+
+        if retrieved_path:
+            for n in retrieved_path:
+                if "GLOBAL_ROOT_PLACEHOLDER" not in n.payload.get("scenario_description", ""):
+                    n.meta["hit_count"] = n.meta.get("hit_count", 0) + 1
+
+        return node
 
     def write_task_experience(
         self,
         scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        status: Union[str, ResultStatus],
-        retrieved_path: Optional[List[MemoryNode]] = None
+        skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus],
+        retrieved_path: Optional[List[MemoryNode]] = None,
+        episode_idx: int = -1,
     ) -> MemoryNode:
-        """
-        写入任务经验到任务树
-        
-        Args:
-            scenario_description: 任务目标描述 (用于向量索引)
-            memory_description: 经验摘要 (一句话)
-            content_body: Workflow / 策略内容
-            status: SUCCESS / FAILURE
-            retrieved_path: 任务树检索到的路径
-        """
-        tree = self.dual_memory.task_tree
-        anchor_node = self._determine_anchor(tree, retrieved_path)
-
-        # Case A: 全新 Root (Zero-shot on task tree)
-        if self._is_root_path(retrieved_path, "task"):
-            logger.info("[TaskTree] Writing new ROOT SCHEMA (Zero-shot task experience).")
-            return self.dual_memory.add_task_root_schema(
-                scenario_description=scenario_description,
-                memory_description=memory_description,
-                content_body=content_body,
-                result_status=status
-            )
-
-        # Case B: 残差更新
-        logger.info(f"[TaskTree] Writing RESIDUAL under anchor: {anchor_node.node_id[:8]}")
-        return self.dual_memory.add_task_experience(
-            anchor_node=anchor_node,
+        return self._write(
+            tree=self.dual_memory.task_tree,
+            add_root_fn=self.dual_memory.add_task_root_skill,
+            add_residual_fn=self.dual_memory.add_task_residual_skill,
             scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=status,
-            force_sibling=False
+            skill=skill,
+            result_status=result_status,
+            retrieved_path=retrieved_path,
+            tree_label="TaskTree",
+            episode_idx=episode_idx,
         )
-
-    # =====================================================================
-    # 环境树写入
-    # =====================================================================
 
     def write_env_experience(
         self,
         scenario_description: str,
-        memory_description: str,
-        content_body: str,
-        status: Union[str, ResultStatus],
-        retrieved_path: Optional[List[MemoryNode]] = None
+        skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus],
+        retrieved_path: Optional[List[MemoryNode]] = None,
+        episode_idx: int = -1,
     ) -> MemoryNode:
-        """
-        写入环境经验到环境树
-        
-        Args:
-            scenario_description: 环境描述 (用于向量索引)
-            memory_description: 经验摘要 (一句话)
-            content_body: 环境反思 / 物品位置经验
-            status: SUCCESS / FAILURE
-            retrieved_path: 环境树检索到的路径
-        """
-        tree = self.dual_memory.env_tree
-        anchor_node = self._determine_anchor(tree, retrieved_path)
-
-        # Case A: 全新 Root
-        if self._is_root_path(retrieved_path, "env"):
-            logger.info("[EnvTree] Writing new ROOT SCHEMA (Zero-shot env experience).")
-            return self.dual_memory.add_env_root_schema(
-                scenario_description=scenario_description,
-                memory_description=memory_description,
-                content_body=content_body,
-                result_status=status
-            )
-
-        # Case B: 残差更新
-        logger.info(f"[EnvTree] Writing RESIDUAL under anchor: {anchor_node.node_id[:8]}")
-        return self.dual_memory.add_env_experience(
-            anchor_node=anchor_node,
+        return self._write(
+            tree=self.dual_memory.env_tree,
+            add_root_fn=self.dual_memory.add_env_root_skill,
+            add_residual_fn=self.dual_memory.add_env_residual_skill,
             scenario_description=scenario_description,
-            memory_description=memory_description,
-            content_body=content_body,
-            result_status=status,
-            force_sibling=False
+            skill=skill,
+            result_status=result_status,
+            retrieved_path=retrieved_path,
+            tree_label="EnvTree",
+            episode_idx=episode_idx,
         )
-
-    # =====================================================================
-    # 统一写入接口 (Agent 调用)
-    # =====================================================================
 
     def write_dual_experience(
         self,
         task_description: str,
         env_description: str,
-        task_reflection: Dict[str, str],
-        env_reflection: Dict[str, str],
-        status: Union[str, ResultStatus],
+        task_skill: Dict[str, Any],
+        env_skill: Dict[str, Any],
+        result_status: Union[str, ResultStatus],
         task_retrieved_path: Optional[List[MemoryNode]] = None,
-        env_retrieved_path: Optional[List[MemoryNode]] = None
+        env_retrieved_path: Optional[List[MemoryNode]] = None,
+        episode_idx: int = -1,
+        env_result_status: Optional[Union[str, ResultStatus]] = None,
     ) -> Dict[str, MemoryNode]:
-        """
-        一次性写入两棵树
-
-        Args:
-            task_description: 任务目标 (e.g. "put some spraybottle on toilet")
-            env_description:  环境描述 (e.g. "You are in the middle of a room...")
-            task_reflection:  任务反思 {"memory_description": "...", "content_body": "..."}
-            env_reflection:   环境反思 {"memory_description": "...", "content_body": "..."}
-            status: SUCCESS / FAILURE
-            task_retrieved_path: 任务树的检索路径
-            env_retrieved_path:  环境树的检索路径
-
-        Returns:
-            {"task_node": MemoryNode, "env_node": MemoryNode}
-        """
         task_node = self.write_task_experience(
             scenario_description=task_description,
-            memory_description=task_reflection["memory_description"],
-            content_body=_sanitize_content(task_reflection["content_body"]),
-            status=status,
-            retrieved_path=task_retrieved_path
+            skill=task_skill,
+            result_status=result_status,
+            retrieved_path=task_retrieved_path,
+            episode_idx=episode_idx,
         )
-
         env_node = self.write_env_experience(
             scenario_description=env_description,
-            memory_description=env_reflection["memory_description"],
-            content_body=_sanitize_content(env_reflection["content_body"]),
-            status=status,
-            retrieved_path=env_retrieved_path
+            skill=env_skill,
+            result_status=env_result_status if env_result_status is not None else result_status,
+            retrieved_path=env_retrieved_path,
+            episode_idx=episode_idx,
         )
-
         return {"task_node": task_node, "env_node": env_node}
