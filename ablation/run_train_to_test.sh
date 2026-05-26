@@ -3,8 +3,8 @@
 # phase=all → 先在 train split 积累记忆，再冻结评估 test split
 set -euo pipefail
 
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
-export DEEPSEEK_API_KEY='REDACTED_API_KEY'
+export ALFWORLD_DATA="${ALFWORLD_DATA:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../ALFWorld/data/alfworld}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

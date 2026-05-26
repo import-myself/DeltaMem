@@ -6,8 +6,14 @@ PR-Tree WebShop Configuration
 - Env  Tree:  env_description 是产品类目短语，相似类目间天然相近，提高基础阈值（避免误命中）
 """
 
+import os
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent        # WebShop/
+_ROOT = _HERE.parent                           # project root
+
 # ==================== 路径配置 ====================
-EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = os.environ.get("EMBEDDING_MODEL_PATH", str(_ROOT / "embedding" / "e5-base-v2"))
 STORAGE_PATH = "./storage"
 DATA_DIR = "./data"
 

@@ -8,7 +8,7 @@ build_synapse_memory.py  —  ScienceWorld Synapse 记忆库离线构建脚本
 
 运行方式
 --------
-cd /hdd/REDACTED_USER/DeltaMem/ScienceWorld
+cd /path/to/DeltaMem/ScienceWorld
 python build_synapse_memory.py \
     --traj-dir dev/online_dual_memory_Qwen3-14B \
     --memory-path storage/synapse_memory \

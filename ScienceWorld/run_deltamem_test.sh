@@ -2,7 +2,7 @@
 # ScienceWorld test — DeltaMem PRTree
 set -euo pipefail
 
-export DEEPSEEK_API_KEY='sk-7cca8e16e772422796c73c5ef8bdc13f'
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 model_name="deepseek-v4-flash"

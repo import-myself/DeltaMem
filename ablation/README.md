@@ -24,8 +24,8 @@
 所有 Shell 脚本已内嵌以下变量，修改后直接运行即可：
 
 ```bash
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
-export DEEPSEEK_API_KEY='sk-xxxx'
+export ALFWORLD_DATA='/path/to/ALFWorld/data/alfworld'
+export DEEPSEEK_API_KEY='your_api_key_here'
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 ```
 
@@ -57,7 +57,7 @@ export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 **运行：**
 
 ```bash
-cd /hdd/REDACTED_USER/DeltaMem/ablation
+cd /path/to/DeltaMem/ablation
 
 # 全量三个 benchmark（顺序执行）
 bash run_memory_mode_ablation.sh

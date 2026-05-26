@@ -21,15 +21,15 @@ cd "${SCRIPT_DIR}"
 mkdir -p results/mind2web_website_v1 logs
 
 KEYS=(
-    "sk-5529a7a886ee4b9bb407b614c4ead012"
-    "sk-b457f919725342e282ad5900ead23542"
-    "sk-fda59b026c224dcb933036d18cea9a6a"
-    "sk-7cca8e16e772422796c73c5ef8bdc13f"
-    "sk-77cd89544f164fbf90e6660c11c0b244"
-    "sk-b8580c45f7d140608cad68690f3d9101"
-    "sk-637985b50bfb4b4dbf7beeaed8e9fd37"
-    "sk-9924eacd416741088d71d10bbd84c693"
-    "sk-00f63c0f59f2490f8b5ff17eea0c28ac"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
 )
 
 # 9 组: (task_base task_step env_base env_step)

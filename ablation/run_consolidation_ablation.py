@@ -21,7 +21,7 @@ Skill 固化阈值消融实验 (实验 2.3)
   n_episodes, timestamp
 
 运行示例:
-  cd /hdd/REDACTED_USER/DeltaMem/ablation
+  cd /path/to/DeltaMem/ablation
   python run_consolidation_ablation.py \\
       --load-memory ../ALFWorld/storage/prtree_dual_offline \\
       --thresholds 1,2,3,5,8 \\

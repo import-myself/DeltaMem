@@ -4,7 +4,7 @@
 # 全部并发，预计 ~30 分钟出结果
 set -euo pipefail
 
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
+export ALFWORLD_DATA="${ALFWORLD_DATA:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../ALFWorld/data/alfworld}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,13 +13,13 @@ mkdir -p results/ts_shards logs
 
 # 7 个 API key（循环使用）
 KEYS=(
-    "sk-5529a7a886ee4b9bb407b614c4ead012"
-    "sk-b457f919725342e282ad5900ead23542"
-    "sk-fda59b026c224dcb933036d18cea9a6a"
-    "sk-7cca8e16e772422796c73c5ef8bdc13f"
-    "sk-77cd89544f164fbf90e6660c11c0b244"
-    "sk-b8580c45f7d140608cad68690f3d9101"
-    "sk-637985b50bfb4b4dbf7beeaed8e9fd37"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
 )
 
 ENV_BASE="0.85"

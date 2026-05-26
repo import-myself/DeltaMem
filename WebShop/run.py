@@ -515,7 +515,7 @@ def run_evaluation(args):
         if args.resume:
             check_memory_path(rb_path, "reasoningbank")
         # WebShop 无本地 config.py，沿用 Mind2web/ALFWorld 的 e5-base-v2 默认路径
-        emb_path = args.embed_model_path or "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
+        emb_path = args.embed_model_path or os.environ.get("EMBEDDING_MODEL_PATH") or str(Path(__file__).resolve().parent.parent / "embedding" / "e5-base-v2")
         rb_store = ReasoningBankMemory(
             memory_path=rb_path,
             llm_client=llm_client,

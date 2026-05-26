@@ -2,8 +2,8 @@
 # ALFWorld eval_out_of_distribution — DeltaMem PRTree
 set -euo pipefail
 
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
-export DEEPSEEK_API_KEY='sk-b457f919725342e282ad5900ead23542'
+export ALFWORLD_DATA="${ALFWORLD_DATA:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data/alfworld}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 model_name="deepseek-v4-flash"

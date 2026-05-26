@@ -18,10 +18,10 @@ cd "${SCRIPT_DIR}"
 mkdir -p results/webshop_flat_v1 logs
 
 KEYS=(
-    "sk-5529a7a886ee4b9bb407b614c4ead012"
-    "sk-b457f919725342e282ad5900ead23542"
-    "sk-fda59b026c224dcb933036d18cea9a6a"
-    "sk-77cd89544f164fbf90e6660c11c0b244"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
 )
 
 # 4 组: (task_base env_base) — depth_step 固定 0.0

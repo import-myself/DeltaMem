@@ -11,7 +11,7 @@ benchmark="sciworld"
 mkdir -p logs results trajectories storage
 
 # ---- 1. no-memory ----
-DEEPSEEK_API_KEY='sk-5529a7a886ee4b9bb407b614c4ead012' \
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
 nohup python -u run_sciworld.py \
     --mode          eval \
     --model         "${model_name}" \
@@ -23,7 +23,7 @@ nohup python -u run_sciworld.py \
 echo "Started no-memory      PID=$!"
 
 # ---- 2. synapse ----
-DEEPSEEK_API_KEY='sk-b457f919725342e282ad5900ead23542' \
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
 nohup python -u run_sciworld.py \
     --mode          eval \
     --model         "${model_name}" \
@@ -37,7 +37,7 @@ nohup python -u run_sciworld.py \
 echo "Started synapse         PID=$!"
 
 # ---- 3. awm ----
-DEEPSEEK_API_KEY='sk-fda59b026c224dcb933036d18cea9a6a' \
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
 nohup python -u run_sciworld.py \
     --mode          eval \
     --model         "${model_name}" \
@@ -51,7 +51,7 @@ nohup python -u run_sciworld.py \
 echo "Started awm             PID=$!"
 
 # ---- 4. reasoningbank ----
-DEEPSEEK_API_KEY='sk-7cca8e16e772422796c73c5ef8bdc13f' \
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
 nohup python -u run_sciworld.py \
     --mode          eval \
     --model         "${model_name}" \

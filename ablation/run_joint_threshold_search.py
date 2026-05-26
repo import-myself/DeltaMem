@@ -20,7 +20,7 @@ PRTree 联合阈值网格搜索（支持 ALFWorld / ScienceWorld / Mind2Web / We
 已跑过的 exp_id 自动跳过（断点续跑）。
 
 示例：
-  cd /hdd/REDACTED_USER/DeltaMem/ablation
+  cd /path/to/DeltaMem/ablation
 
   # 单个 benchmark
   python run_joint_threshold_search.py \\

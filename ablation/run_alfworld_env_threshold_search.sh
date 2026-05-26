@@ -4,7 +4,7 @@
 # 基准：tb=0.75,ts=0.01,eb=0.85,es=0.03 → SR=84.33% (已知，跳过)
 set -euo pipefail
 
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
+export ALFWORLD_DATA="${ALFWORLD_DATA:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../ALFWorld/data/alfworld}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,21 +13,21 @@ mkdir -p results/env_search_shards logs
 
 # 15 个 API key，一一对应 15 组实验
 KEYS=(
-    "sk-5529a7a886ee4b9bb407b614c4ead012"
-    "sk-b457f919725342e282ad5900ead23542"
-    "sk-fda59b026c224dcb933036d18cea9a6a"
-    "sk-7cca8e16e772422796c73c5ef8bdc13f"
-    "sk-77cd89544f164fbf90e6660c11c0b244"
-    "sk-b8580c45f7d140608cad68690f3d9101"
-    "sk-637985b50bfb4b4dbf7beeaed8e9fd37"
-    "sk-9924eacd416741088d71d10bbd84c693"
-    "sk-00f63c0f59f2490f8b5ff17eea0c28ac"
-    "sk-f7640e8114204d0380e6c264d898978a"
-    "sk-d05f4122f07146b4b855a2a7f5bc8c71"
-    "sk-26364e54c05848fe8f3dd4523077d9ea"
-    "sk-a1347041cff94176a2bed4eddf35ad73"
-    "sk-5c4c5a1ef40c4f9c901f120c2abb42e3"
-    "sk-bc219b04b617443bae3504eb6f299b10"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
+    "${DEEPSEEK_API_KEY}"
 )
 
 # 15 组参数: (task_base task_step env_base env_step)

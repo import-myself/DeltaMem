@@ -3,8 +3,8 @@
 # 覆盖 3 个 benchmark，4 种路由模式: no_memory / skill_only / episodic_only / dual_routing
 set -euo pipefail
 
-export ALFWORLD_DATA='/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
-export DEEPSEEK_API_KEY='REDACTED_API_KEY'
+export ALFWORLD_DATA="${ALFWORLD_DATA:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../ALFWorld/data/alfworld}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
 export DEEPSEEK_BASE_URL='https://api.deepseek.com'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

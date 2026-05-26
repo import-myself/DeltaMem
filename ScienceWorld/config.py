@@ -6,9 +6,12 @@ PR-Tree Configuration File (ScienceWorld)
 import os
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent        # ScienceWorld/
+_ROOT = _HERE.parent                           # project root
+
 # ==================== 路径配置 ====================
 # 本地 Embedding 模型路径 (使用 sentence-transformers)
-EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = os.environ.get("EMBEDDING_MODEL_PATH", str(_ROOT / "embedding" / "e5-base-v2"))
 
 # 记忆存储路径
 STORAGE_PATH = "./storage"

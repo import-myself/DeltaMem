@@ -6,13 +6,15 @@ PR-Tree Configuration File
 import os
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent        # ALFWorld/
+_ROOT = _HERE.parent                           # project root
+
 # ==================== 路径配置 ====================
 # ALFWorld 数据路径
-ALFWORLD_DATA_PATH = '/hdd/REDACTED_USER/DeltaMem/ALFWorld/data/alfworld'
+ALFWORLD_DATA_PATH = os.environ.get("ALFWORLD_DATA", str(_HERE / "data" / "alfworld"))
 
 # 本地 Embedding 模型路径 (使用 sentence-transformers)
-# 推荐模型: all-MiniLM-L6-v2, all-mpnet-base-v2
-EMBEDDING_MODEL_PATH = "/hdd/REDACTED_USER/DeltaMem/embedding/e5-base-v2"
+EMBEDDING_MODEL_PATH = os.environ.get("EMBEDDING_MODEL_PATH", str(_ROOT / "embedding" / "e5-base-v2"))
 
 # 记忆存储路径
 STORAGE_PATH = "./memory_storage"
