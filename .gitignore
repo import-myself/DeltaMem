@@ -28,6 +28,8 @@ ablation/results/
 ablation/trajectories/
 ablation/param_sensitivity/results/
 ablation/param_sensitivity/trajectories/
+ablation/param_sensitivity/figures/
+ablation/param_sensitivity/trajectories_test/
 
 # WebShop: runtime environment and large index files
 WebShop/data/
