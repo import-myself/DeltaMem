@@ -21,15 +21,8 @@ Paper/
 ACL/
 .claude/
 
-# ablation: shell scripts contain API keys; large runtime dirs excluded
-ablation/**/*.sh
-ablation/logs/
-ablation/results/
-ablation/trajectories/
-ablation/param_sensitivity/results/
-ablation/param_sensitivity/trajectories/
-ablation/param_sensitivity/figures/
-ablation/param_sensitivity/trajectories_test/
+# ablation: 整个目录不上传（包含大量实验脚本和运行时文件）
+ablation/
 
 # WebShop: runtime environment and large index files
 WebShop/data/
@@ -41,10 +34,9 @@ WebShop/web_agent_site/
 WebShop/search_engine/indexes*/
 WebShop/search_engine/resources*/
 WebShop/env_setup/
-
-# ScienceWorld shell scripts with API keys
-ScienceWorld/*.sh
+WebShop/search_engine/
 
 api.md
 additional_experiments.md
 scripts/
+ScienceWorld/run_baselines_dev_rerun.sh
